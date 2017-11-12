@@ -1,9 +1,9 @@
-# 🚀 Chrome extension to display repository size on GitHub [![JavaScript Style Guide](https://img.shields.io/badge/code%20style-standard-brightgreen.svg)](http://standardjs.com/) [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci) [![Chrome Web Store](https://img.shields.io/chrome-web-store/d/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
+# 🚀 Chrome extension to display structure-diffs on GitHub (http://standardjs.com/) [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci) [![Chrome Web Store](https://img.shields.io/chrome-web-store/d/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
 
 
 Automatically adds repository size to GitHub's repository summary.
 
-[![Featured on Product Hunt](./product-hunt.png)](https://www.producthunt.com/tech/github-repository-size) [![Install from chrome web store](https://developer.chrome.com/webstore/images/ChromeWebStore_Badge_v2_340x96.png)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
+[![Install from chrome web store](https://developer.chrome.com/webstore/images/ChromeWebStore_Badge_v2_340x96.png)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
 
 
 ## Screenshot
@@ -38,8 +38,3 @@ and then remove it to use previously set token;
 2. Go to chrome extensions [chrome://extensions](chrome://extensions)
 3. Enable developer mode
 4. Click on load unpacked extension and select this cloned repo
-
-
-## License
-
-MIT
