@@ -2,6 +2,7 @@
 
 const GITHUB_TOKEN_KEY = 'x-github-token'
 const TOKEN_FEATURE_INFORMATION_KEY = 'user-knows-token-feature'
+const CLARITY_BOT_STRUCTURE_DIFF_API_URL = 'http://localhost:8080/v1/github/diff'
 
 const storage = chrome.storage.sync || chrome.storage.local
 
@@ -49,7 +50,7 @@ function informUserAboutGithubTokenFeature () {
     const userKnows = storedData[TOKEN_FEATURE_INFORMATION_KEY]
 
     if (!userKnows) {
-      if (confirm('GitHub Repository Size now supports private repositories through Github personal access tokens. Do you want to add a token?')) {
+      if (confirm('GitHub Structure-Diffs supports private repositories through Github personal access tokens. Do you want to add a token?')) {
         askGithubToken(() => {
           userNowKnowsAboutGithubTokenFeature(() => {})
         })
@@ -76,6 +77,10 @@ const askGithubToken = (cb) => {
   }
 }
 
+const openNewTab = (url) => {
+  chrome.tabs.create({url: url, selected: false});
+}
+
 chrome.browserAction.onClicked.addListener((tab) => {
   handleOldGithubToken((askToSetToken) => {
     if (askToSetToken) {
@@ -85,3 +90,11 @@ chrome.browserAction.onClicked.addListener((tab) => {
 })
 
 informUserAboutGithubTokenFeature()
+
+chrome.extension.onMessage.addListener(
+  function(request, sender, sendResponse){
+      if(request.msg[0] == "openTab") {
+        openNewTab(request.msg[1]);
+      }
+  }
+);

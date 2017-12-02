@@ -1,0 +1,11 @@
+@keyframes glowing {
+  to {
+    box-shadow: 0px 0px 2px 2px rgb(219, 171, 9);
+  }
+}
+  
+  .button-glow {
+    animation: glowing 1.0s linear infinite alternate;
+    border-radius: 50%;
+  }
+  

@@ -1,17 +1,18 @@
 {
-  "name": "GitHub Repository Size",
-  "version": "0.4.1",
+  "name": "GitHub Structure-Diffs",
+  "version": "0.0.1",
   "manifest_version": 2,
-  "description": "Automatically adds repository size to GitHub's repository summary",
-  "homepage_url": "https://github.com/harshjv/github-repo-size",
-  "author": "Harsh Vakharia",
+  "description": "Automatically generates structure-diffs for GitHub pull requests.",
+  "homepage_url": "https://github.com/clarity-org/structure-diff-chrome-app",
+  "author": "Muntazir Fadhel",
   "icons": {
-    "16": "icons/ghrs16.png",
-    "48": "icons/ghrs48.png",
-    "128": "icons/ghrs128.png"
+    "16": "icons/clarity-bot16.png",
+    "48": "icons/clarity-bot48.png",
+    "128": "icons/clarity-bot128.png"
   },
   "permissions": [
     "storage",
+    "tabs",
     "activeTab"
   ],
   "background" : {
@@ -27,15 +28,19 @@
       "js": [
         "src/inject.js"
       ],
-      "run_at": "document_end"
+      "css": [
+        "css/style.css"
+      ],
+      "run_at": "document_end"      
     }
   ],
+  "web_accessible_resources": ["icons/clarity-bot.svg"],
   "browser_action": {
     "default_icon": {
-      "16": "icons/ghrs16.png",
-      "48": "icons/ghrs48.png",
-      "128": "icons/ghrs128.png"
+      "16": "icons/clarity-bot16.png",
+      "48": "icons/clarity-bot48.png",
+      "128": "icons/clarity-bot128.png"
     },
-    "default_title": "GitHub Repository Size: Click to set/remove access token"
+    "default_title": "GitHub Structure-Diffs: Click to set/remove access token"
   }
 }
