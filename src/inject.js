@@ -27,11 +27,19 @@ const getRepoContentURI = (uri) => {
 }
 
 const checkClarityBotStatus = (response) => {
-  if (response.status >= 200 && response.status < 300) {
+  if (response.status == 509) {
+    setButtonHoverMessage("Generated structure-diff is too large and will not be displayed.")
+    throw Error()
+  } else if (response.status == 204) {
+    setButtonHoverMessage("Generated structure-diff is empty.")
+    throw Error()
+  } else if (response.status >= 200 && response.status < 300) {
     return response
-  } else if (response.status == 403) {
+  } else if (response.status == 401) {
     setButtonHoverMessage("Invalid or non-existent token supplied, click on the structure-diff chrome extension button to set an OAuth token.")
+    throw Error()
   } else {
+    setButtonHoverMessage("Oops! An unexpected error was encountered while processing this request.")
     throw Error(`clarity-bot structure-diff API encountered an error while processing this request.`)
   }
 }
@@ -64,9 +72,14 @@ const parseText = (response) => {
 const retrieveStructureDiff = (pullRequestObj) => {
 
   let repoURI = window.location.pathname.substring(1);
-  var baseRepoOwner = window.location.pathname.split('/')[1];;
-  var baseRepoName = window.location.pathname.split('/')[2];;
+  var baseRepoOwner = window.location.pathname.split('/')[1];
+  var baseRepoName = window.location.pathname.split('/')[2];
   var baseSHA = pullRequestObj.base.sha;
+  if (pullRequestObj.head === null || pullRequestObj.head.repo === null || pullRequestObj.head.repo.owner === null) {
+    showFailure();
+    setButtonHoverMessage("The head branch is unreachable!")
+    return;
+  }
   var headRepoOwner = pullRequestObj.head.repo.owner.login;
   var headRepoName = pullRequestObj.head.repo.name;
   var headSHA = pullRequestObj.head.sha;
@@ -75,27 +88,28 @@ const retrieveStructureDiff = (pullRequestObj) => {
   var prId = pullRequestObj.id;
   var access_token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken;
 
-  var sdReqURL = CLARITY_BOT_STRUCTURE_DIFF_API
-    + '?baseRepoOwner=' + baseRepoOwner
-    + '&baseRepoName=' + baseRepoName
-    + '&baseSha=' + baseSHA
-    + '&headRepoOwner=' + headRepoOwner
-    + '&headRepoName=' + headRepoName
-    + '&headSha=' + headSHA
-    + '&issueNo=' + issueNo
-    + '&id=' + prId
-    + '&prUrl=' + prURL;
+  var sdReqURL = CLARITY_BOT_STRUCTURE_DIFF_API +
+    '?baseRepoOwner=' + baseRepoOwner +
+    '&baseRepoName=' + baseRepoName +
+    '&baseSha=' + baseSHA +
+    '&headRepoOwner=' + headRepoOwner +
+    '&headRepoName=' + headRepoName +
+    '&headSha=' + headSHA +
+    '&issueNo=' + issueNo +
+    '&id=' + prId +
+    '&prUrl=' + prURL;
 
   // add token if available
   if (access_token) {
     sdReqURL += '&access_token=' + access_token;
   }
+  console.log(sdReqURL);
   const request = new Request(encodeURI(sdReqURL));
   fetch(request)
     .then(checkClarityBotStatus)
     .then(parseText)
     .then(displayResult)
-    .catch(function (err) {
+    .catch(function(err) {
       console.log(err);
       showFailure()
     });
@@ -111,7 +125,7 @@ const getGitHubPullRequestData = (url, callback) => {
     .then(checkGitHubStatus)
     .then(parseJSON)
     .then(callback)
-    .catch(function (err) {
+    .catch(function(err) {
       console.log(err);
       showFailure();
     });
@@ -151,7 +165,7 @@ const checkForPullRequestPage = () => {
     topButtonList.appendChild(li);
 
     // create event listener for the structure-diff button
-    structureDiffButton.addEventListener('click', function () {
+    structureDiffButton.addEventListener('click', function() {
 
       showLoader();
       // start generating structure-diff...
@@ -194,11 +208,13 @@ const setButtonHoverMessage = (message) => {
 
 const displayResult = (diffId) => {
   showSuccess();
-  chrome.extension.sendMessage({ msg: ["openTab", CLARITY_BOT_STRUCTURE_DIFF_API + '/' + diffId] });
+  chrome.extension.sendMessage({
+    msg: ["openTab", CLARITY_BOT_STRUCTURE_DIFF_API + '/' + diffId]
+  });
 }
 
 
-storage.get(GITHUB_TOKEN_KEY, function (data) {
+storage.get(GITHUB_TOKEN_KEY, function(data) {
   githubToken = data[GITHUB_TOKEN_KEY]
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (changes[GITHUB_TOKEN_KEY]) {

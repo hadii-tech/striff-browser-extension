@@ -1,6 +1,6 @@
 {
-  "name": "GitHub Structure-Diffs",
-  "version": "0.0.1",
+  "name": "Clarity-bot Structure-Diffs for GitHub",
+  "version": "1.0.0",
   "manifest_version": 2,
   "description": "Automatically generates structure-diffs for GitHub pull requests.",
   "homepage_url": "https://github.com/clarity-org/structure-diff-chrome-app",
@@ -41,6 +41,6 @@
       "48": "icons/clarity-bot48.png",
       "128": "icons/clarity-bot128.png"
     },
-    "default_title": "GitHub Structure-Diffs: Click to set/remove access token"
+    "default_title": "Clarity-bot Structure-Diffs for GitHub: Click to set/remove access token"
   }
 }
