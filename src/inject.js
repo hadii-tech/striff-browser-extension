@@ -69,7 +69,7 @@ const parseText = (response) => {
   throw Error('Could not parse API response text')
 }
 
-const retrieveStructureDiff = (pullRequestObj) => {
+const retrieveStructureDiff = (pullRequestObj, changedFiles) => {
 
   let repoURI = window.location.pathname.substring(1);
   var baseRepoOwner = window.location.pathname.split('/')[1];
@@ -83,29 +83,40 @@ const retrieveStructureDiff = (pullRequestObj) => {
   var headRepoOwner = pullRequestObj.head.repo.owner.login;
   var headRepoName = pullRequestObj.head.repo.name;
   var headSHA = pullRequestObj.head.sha;
-  var issueNo = window.location.pathname.split('/')[4];;
+  var issueNo = window.location.pathname.split('/')[4];
   var prURL = window.location.href;
   var prId = pullRequestObj.id;
   var access_token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken;
 
-  var sdReqURL = CLARITY_BOT_STRUCTURE_DIFF_API +
-    '?baseRepoOwner=' + baseRepoOwner +
-    '&baseRepoName=' + baseRepoName +
-    '&baseSha=' + baseSHA +
-    '&headRepoOwner=' + headRepoOwner +
-    '&headRepoName=' + headRepoName +
-    '&headSha=' + headSHA +
-    '&issueNo=' + issueNo +
-    '&id=' + prId +
-    '&prUrl=' + prURL;
+  var sdRequestOj = {
+    headRepoOwner: headRepoOwner,
+    headRepoName: headRepoName,
+    headSha: headSHA,
+    baseRepoOwner: baseRepoOwner,
+    baseRepoName: baseRepoName,
+    baseSha: baseSHA,
+    prUrl: prURL,
+    issueNo: issueNo,
+    prId: prId,
+    changedFiles: changedFiles
+  };
+
+  var data = new FormData();
+  data = JSON.stringify(sdRequestOj);
+  var sdReqURL = CLARITY_BOT_STRUCTURE_DIFF_API;
 
   // add token if available
   if (access_token) {
-    sdReqURL += '&access_token=' + access_token;
+    sdReqURL += '&token=' + access_token;
   }
+
   console.log(sdReqURL);
   const request = new Request(encodeURI(sdReqURL));
-  fetch(request)
+  fetch(request, 
+  {
+    method: "POST",
+    body: data,
+  })
     .then(checkClarityBotStatus)
     .then(parseText)
     .then(displayResult)
@@ -115,16 +126,37 @@ const retrieveStructureDiff = (pullRequestObj) => {
     });
 }
 
-const getGitHubPullRequestData = (url, callback) => {
-  const token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken
-  if (token) {
-    headerObj['Authorization'] = 'token ' + token
-  }
-  const request = new Request(url)
-  fetch(request)
+const githubPullRequest = (url) => {
+
+  // TODO: make use of the token if set...
+  const token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken;
+  const pullRequestRequest = new Request(url)
+  fetch(pullRequestRequest)
     .then(checkGitHubStatus)
     .then(parseJSON)
-    .then(callback)
+    .then(
+      function(pullRequest) {
+        changedFilesUrl = 'https://api.github.com/repos/' + pullRequest.base.repo.owner.login + '/' + pullRequest.base.repo.name + '/pulls/' + window.location.pathname.split('/')[4] + '/files';
+        const changedFilesRequest = new Request(changedFilesUrl)
+        fetch(changedFilesRequest)
+          .then(checkGitHubStatus)
+          .then(parseJSON)
+          .then(
+            function(changedFiles) {
+              var changedSourceFiles = []
+              var arrayLength = changedFiles.length;
+              for (var i = 0; i < arrayLength; i++) {
+                changedSourceFiles.push(changedFiles[i]['filename']);
+              }
+              retrieveStructureDiff(pullRequest, changedSourceFiles);
+            }
+          )
+          .catch(function(err) {
+            console.log(err);
+            showFailure();
+          });
+      }
+    )
     .catch(function(err) {
       console.log(err);
       showFailure();
@@ -169,7 +201,7 @@ const checkForPullRequestPage = () => {
 
       showLoader();
       // start generating structure-diff...
-      getGitHubPullRequestData('https://api.github.com/repos/' + repoOwner + '/' + repoName + '/pulls/' + issueNo, retrieveStructureDiff)
+      githubPullRequest('https://api.github.com/repos/' + repoOwner + '/' + repoName + '/pulls/' + issueNo);
     });
   }
 
