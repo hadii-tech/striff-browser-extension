@@ -1,14 +1,4 @@
-# 🚀 Chrome extension to display structure-diffs on GitHub [![Chrome Web Store](https://img.shields.io/chrome-web-store/v/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci) [![Chrome Web Store](https://img.shields.io/chrome-web-store/d/apnjnioapinblneaedefcnopcjepgkci.svg)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
-
-
-Automatically adds repository size to GitHub's repository summary.
-
-[![Install from chrome web store](https://developer.chrome.com/webstore/images/ChromeWebStore_Badge_v2_340x96.png)](https://chrome.google.com/webstore/detail/github-repository-size/apnjnioapinblneaedefcnopcjepgkci)
-
-
-## Screenshot
-
-![Screenshot of repository size on GitHub](https://raw.githubusercontent.com/harshjv/github-repo-size/master/screenshot.png)
+# 🚀 Browser extension to display striff diagrams on GitHub 
 
 
 ## Private Repository
