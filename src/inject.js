@@ -69,7 +69,7 @@ const parseText = (response) => {
   throw Error('Could not parse API response text')
 }
 
-const retrieveStructureDiff = (pullRequestObj, changedFiles) => {
+const fetchStriffMetadata = (pullRequestObj, changedFiles) => {
 
   let repoURI = window.location.pathname.substring(1);
   var baseRepoOwner = window.location.pathname.split('/')[1];
@@ -148,7 +148,7 @@ const githubPullRequest = (url) => {
               for (var i = 0; i < arrayLength; i++) {
                 changedSourceFiles.push(changedFiles[i]['filename']);
               }
-              retrieveStructureDiff(pullRequest, changedSourceFiles);
+              fetchStriffMetadata(pullRequest, changedSourceFiles);
             }
           )
           .catch(function(err) {
@@ -166,7 +166,6 @@ const githubPullRequest = (url) => {
 const getFileName = (text) => text.trim().split('/')[0]
 
 const checkForPullRequestPage = () => {
-
   let repoURI = window.location.pathname.substring(1)
   if (repoURI.match(/.*\/pull\/[0-9]*/)) {
     // the current page represets a GitHub Pull Request

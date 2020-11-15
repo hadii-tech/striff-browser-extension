@@ -50,13 +50,13 @@ function informUserAboutGithubTokenFeature () {
     const userKnows = storedData[TOKEN_FEATURE_INFORMATION_KEY]
 
     if (!userKnows) {
-      if (confirm('GitHub Structure-Diffs supports private repositories through Github personal access tokens. Do you want to add a token?')) {
+      if (confirm('The striff-bot GitHub browser extension requires a Github personal access tokens. Do you want to add one now?')) {
         askGithubToken(() => {
           userNowKnowsAboutGithubTokenFeature(() => {})
         })
       } else {
         userNowKnowsAboutGithubTokenFeature(() => {
-          alert('You can click extension icon to set a token.')
+          alert('You can click the extension icon to set a token.')
         })
       }
     }
