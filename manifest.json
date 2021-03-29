@@ -1,46 +1,34 @@
 {
-  "name": "Clarity-bot Structure-Diffs for GitHub",
+  "name": "Striff Report Browser Extension",
   "version": "1.0.0",
   "manifest_version": 2,
-  "description": "Automatically generates structure-diffs for GitHub pull requests.",
+  "description": "Automatically generates striffs for GitHub pull requests.",
   "homepage_url": "https://github.com/clarity-org/structure-diff-chrome-app",
-  "author": "Muntazir Fadhel",
+  "author": "HADII Technology",
   "icons": {
     "16": "icons/clarity-bot16.png",
     "48": "icons/clarity-bot48.png",
     "128": "icons/clarity-bot128.png"
   },
-  "permissions": [
-    "storage",
-    "tabs",
-    "activeTab"
-  ],
-  "background" : {
-    "scripts" : [
-      "src/background.js"
-    ]
+  "permissions": ["storage", "tabs", "activeTab"],
+  "background": {
+    "scripts": ["src/background.js"]
   },
   "content_scripts": [
     {
-      "matches": [
-        "*://github.com/*"
-      ],
-      "js": [
-        "src/inject.js"
-      ],
-      "css": [
-        "css/style.css"
-      ],
-      "run_at": "document_end"      
+      "matches": ["*://github.com/*"],
+      "js": ["src/inject.js"],
+      "css": ["css/style.css"],
+      "run_at": "document_end"
     }
   ],
-  "web_accessible_resources": ["icons/clarity-bot.svg"],
+  "web_accessible_resources": ["icons/clarity-bot.svg", "templates/*"],
   "browser_action": {
     "default_icon": {
       "16": "icons/clarity-bot16.png",
       "48": "icons/clarity-bot48.png",
       "128": "icons/clarity-bot128.png"
     },
-    "default_title": "Clarity-bot Structure-Diffs for GitHub: Click to set/remove access token"
+    "default_title": "Striff-bot browser extension: Click to set/remove access token"
   }
 }

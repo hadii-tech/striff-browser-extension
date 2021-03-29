@@ -1,257 +1,227 @@
 /* global fetch, Request, Headers, chrome, localStorage */
 
-const CLARITY_BOT_STRUCTURE_DIFF_API = 'https://api.clarity-bot.com/v1/github/diff';
-const LI_TAG_ID = 'github-repo-size'
-const GITHUB_TOKEN_KEY = 'x-github-token'
-const GREEN_CHECK_MARK = "<svg style=\"margin-top: 1.5px;\" aria-hidden=\"true\" class=\"octicon octicon-check text-green\" height=\"16\" version=\"1.1\" viewBox=\"0 0 12 18\" width=\"12\"><path fill-rule=\"evenodd\" d=\"M12 5l-8 8-4-4 1.5-1.5L4 10l6.5-6.5z\"></path></svg>"
-const RED_CROSS = "<svg aria-hidden=\"true\" class=\"octicon octicon-x text-red\" height=\"16\" version=\"1.1\" viewBox=\"0 0 12 18\" width=\"12\"><path fill-rule=\"evenodd\" d=\"M7.48 8l3.75 3.75-1.48 1.48L6 9.48l-3.75 3.75-1.48-1.48L4.52 8 .77 4.25l1.48-1.48L6 6.52l3.75-3.75 1.48 1.48z\"></path></svg>"
-const YELLOW_CIRCLE = "<svg aria-hidden=\"true\" class=\"octicon octicon-primitive-dot mx-auto d-block bg-pending\" height=\"8\" version=\"1.1\" viewBox=\"0 0 8 12\" width=\"8\"><path fill-rule=\"evenodd\" d=\"M0 8c0-2.2 1.8-4 4-4s4 1.8 4 4-1.8 4-4 4-4-1.8-4-4z\"></path></svg>"
+const STRIFF_BOT_GITHUB_API = "https://api.striff.io/v1/github/striffs";
+const GITHUB_TOKEN_KEY = "x-github-token";
+const GREEN_CHECK_MARK =
+  '<svg style="color:#00bd43;float: left;margin-top: 1px;margin-left:-2px;margin-right: 5px;display:block;" class="octicon octicon-check-circle-fill flex-shrink-0 " title="This step passed" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true" style="color: #7dffc9;"><path fill-rule="evenodd" d="M8 16A8 8 0 108 0a8 8 0 000 16zm3.78-9.72a.75.75 0 00-1.06-1.06L6.75 9.19 5.28 7.72a.75.75 0 00-1.06 1.06l2 2a.75.75 0 001.06 0l4.5-4.5z"></path></svg>';
+const FAILURE_ICON =
+  '<svg style="margin-right: 4px; float:left; margin-top: 2px; margin-left: 0px;" class="octicon octicon-issue-opened UnderlineNav-octicon d-none d-sm-inline text-red" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true"><path fill-rule="evenodd" d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8zm9 3a1 1 0 11-2 0 1 1 0 012 0zm-.25-6.25a.75.75 0 00-1.5 0v3.5a.75.75 0 001.5 0v-3.5z"></path></svg>';
+const NOCHANGE_ICON =
+  '<svg style="margin-right: 4px; float:left; margin-top: 2px; margin-left: 0px;" class="octicon octicon-shield UnderlineNav-octicon d-none d-sm-inline text-orange" height="16" viewBox="0 0 16 16" version="1.1" width="16" aria-hidden="true"><path fill-rule="evenodd" d="M7.467.133a1.75 1.75 0 011.066 0l5.25 1.68A1.75 1.75 0 0115 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.7 1.7 0 01-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 011.217-1.667l5.25-1.68zm.61 1.429a.25.25 0 00-.153 0l-5.25 1.68a.25.25 0 00-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.2.2 0 00.154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.25.25 0 00-.174-.237l-5.25-1.68zM9 10.5a1 1 0 11-2 0 1 1 0 012 0zm-.25-5.75a.75.75 0 10-1.5 0v3a.75.75 0 001.5 0v-3z"></path></svg>';
+const LOADING_CIRCLE =
+  '<svg style="float:left; margin-top:2px; display:block;" fill="none" height="16" viewBox="0 0 16 16" width="16" class="anim-rotate js-check-step-loader mr-2 flex-shrink-0" xmlns="http://www.w3.org/2000/svg"><g stroke-width="2"><circle cx="8" cy="8" r="7" stroke="#959da5"></circle><path d="m12.9497 3.05025c1.3128 1.31276 2.0503 3.09323 2.0503 4.94975 0 1.85651-.7375 3.637-2.0503 4.9497" stroke="#fafbfc"></path></g></svg>';
+const storage = chrome.storage.sync || chrome.storage.local;
+const REPORT_HEADER =
+  '<title>Striff Report</title><style>article { overflow:hidden;} @media only screen and (max-width: 600px) { body { width:95%; padding:0px;} } @media only screen and (max-width: 1200px) { body { margin-left:auto; margin-right:auto; padding:10px; display:block; max-width:1000px; width:90%;} } @media only screen and (min-width: 1200px) { body { margin-left:auto; padding:30px; margin-right:auto; display:block; width:80%; } }</style><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/4.0.0/github-markdown.min.css"><article class="markdown-body">';
+const REPORT_FOOTER =
+  '<script>var striffDivs = document.getElementsByClassName(\"striff\"); for (var i = 0; i < striffDivs.length; i++) { striffDivs.item(i).innerHTML = window.atob(striffDivs.item(i).textContent); }</script><script src="https://unpkg.com/panzoom@9.4.0/dist/panzoom.min.js"></script><script>var gEles = document.querySelectorAll("g"); [].forEach.call(gEles, function(gEle) { panzoom(gEle); });var svgEles = document.querySelectorAll("svg"); [].forEach.call(svgEles, function(svgEle) { svgEle.style.border="1px solid #808080a6"; svgEle.style.width="100%"; svgEle.style.height="80%"; svgEle.style.minHeight="800px";svgEle.style.cursor="move";svgEle.style.marginBottom="10%";});</script></article>';
+let githubToken;
+let reponseObj;
+let repoOwner;
+let repoName;
+let pullNo;
 
-const storage = chrome.storage.sync || chrome.storage.local
-
-let githubToken
-
-const getRepoInfoURI = (uri) => {
-  const repoURI = uri.split('/')
-  return repoURI[0] + '/' + repoURI[1]
-}
-
-const getRepoContentURI = (uri) => {
-  const repoURI = uri.split('/')
-  const treeBranch = repoURI.splice(2, 2, 'contents')
-
-  if (treeBranch && treeBranch[1]) {
-    repoURI.push('?ref=' + treeBranch[1])
-  }
-  return repoURI.join('/')
-}
-
-const checkClarityBotStatus = (response) => {
-  if (response.status == 509) {
-    setButtonHoverMessage("Generated structure-diff is too large and will not be displayed.")
-    throw Error()
-  } else if (response.status == 204) {
-    setButtonHoverMessage("Generated structure-diff is empty.")
-    throw Error()
-  } else if (response.status >= 200 && response.status < 300) {
-    return response
-  } else if (response.status == 401) {
-    setButtonHoverMessage("Invalid or non-existent token supplied, click on the structure-diff chrome extension button to set an OAuth token.")
-    throw Error()
+const processResponse = (response) => {
+  if (response.status > 200) {
+    truncatedErrorMsg = response.body.errorMessage;
+    if (truncatedErrorMsg.length > 23) {
+      truncatedErrorMsg = truncatedErrorMsg.substring(0, 20) + "...";
+    }
+    updateStriffBtn(truncatedErrorMsg, response.body.errorMessage, "failure");
   } else {
-    setButtonHoverMessage("Oops! An unexpected error was encountered while processing this request.")
-    throw Error(`clarity-bot structure-diff API encountered an error while processing this request.`)
+    if (
+      "striffsMap" in response.body &&
+      Object.keys(response.body.striffsMap).length > 0
+    ) {
+      updateStriffBtn(
+        "Striffs generated",
+        "Striff diagrams were successfully generated.",
+        "success"
+      );
+      displayStriffs(response.body);
+    } else {
+      // No structural changes found
+      updateStriffBtn(
+        "No changes found...",
+        "No structural changes were detected in this pull request.",
+        "no_change"
+      );
+    }
   }
-}
+  document.getElementById("striff_btn").disabled = true;
+};
 
-const checkGitHubStatus = (response) => {
-  if (response.status >= 200 && response.status < 300) {
-    return response
-  } else if (response.status == 403) {
-    setButtonHoverMessage("GitHub Rate Limit exceeded or invalid token, click the structure-diff chrome extension button to set an OAuth token.")
-    throw Error(`GitHub Rate Limit exceeded or invalid token, set an GitHub oAuth token to increase your rate limit.`)
-  } else {
-    throw Error(`GitHub returned a bad status: ${response.status}. If this is a private repository, click the structure-diff chrome extension button to set an OAuth token.`)
-  }
-}
-
-const parseJSON = (response) => {
-  if (response) {
-    return response.json()
-  }
-  throw Error('Could not parse API response JSON')
-}
-
-const parseText = (response) => {
-  if (response) {
-    return response.text()
-  }
-  throw Error('Could not parse API response text')
-}
-
-const fetchStriffMetadata = (pullRequestObj, changedFiles) => {
-
-  let repoURI = window.location.pathname.substring(1);
-  var baseRepoOwner = window.location.pathname.split('/')[1];
-  var baseRepoName = window.location.pathname.split('/')[2];
-  var baseSHA = pullRequestObj.base.sha;
-  if (pullRequestObj.head === null || pullRequestObj.head.repo === null || pullRequestObj.head.repo.owner === null) {
-    showFailure();
-    setButtonHoverMessage("The head branch is unreachable!")
-    return;
-  }
-  var headRepoOwner = pullRequestObj.head.repo.owner.login;
-  var headRepoName = pullRequestObj.head.repo.name;
-  var headSHA = pullRequestObj.head.sha;
-  var issueNo = window.location.pathname.split('/')[4];
-  var prURL = window.location.href;
-  var prId = pullRequestObj.id;
-  var access_token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken;
-
-  var sdRequestOj = {
-    headRepoOwner: headRepoOwner,
-    headRepoName: headRepoName,
-    headSha: headSHA,
-    baseRepoOwner: baseRepoOwner,
-    baseRepoName: baseRepoName,
-    baseSha: baseSHA,
-    prUrl: prURL,
-    issueNo: issueNo,
-    prId: prId,
-    changedFiles: changedFiles
-  };
-
-  var data = new FormData();
-  data = JSON.stringify(sdRequestOj);
-  var sdReqURL = CLARITY_BOT_STRUCTURE_DIFF_API;
-
-  // add token if available
-  if (access_token) {
-    sdReqURL += '&token=' + access_token;
-  }
-
-  console.log(sdReqURL);
-  const request = new Request(encodeURI(sdReqURL));
-  fetch(request, 
-  {
-    method: "POST",
+const parseResponse = (response) => {
+  console.log(response);
+  return response.json().then((data) => ({
+    status: response.status,
     body: data,
+  }));
+};
+
+const fetchStriffMetadata = (repoOwner, repoName, pullNo) => {
+  var reqParams = {};
+  if (window.location.hostname === "github.com") {
+    reqParams["gh_hostname"] = "api.github.com";
+  } else {
+    // User is using GitHub enterprise
+    reqParams["gh_hostname"] = window.location.hostname;
+  }
+  var striffReqURL =
+    STRIFF_BOT_GITHUB_API +
+    "/owners/" +
+    repoOwner +
+    "/repos/" +
+    repoName +
+    "/pulls/" +
+    pullNo +
+    "?" +
+    new URLSearchParams(reqParams);
+  const request = new Request(encodeURI(striffReqURL));
+  const headerObj = {
+    Accept: "application/json",
+  };
+  const token = githubToken || localStorage.getItem(GITHUB_TOKEN_KEY);
+  if (token) {
+    headerObj.Authorization = "token " + token;
+  }
+  fetch(request, {
+    method: "GET",
+    headers: headerObj,
   })
-    .then(checkClarityBotStatus)
-    .then(parseText)
-    .then(displayResult)
-    .catch(function(err) {
+    .then(parseResponse)
+    .then(processResponse)
+    .catch(function (err) {
       console.log(err);
-      showFailure()
+      updateStriffBtn(
+        "Unexpected error...",
+        "An unexpected error was encountered while processing this request.",
+        "failure"
+      );
     });
-}
-
-const githubPullRequest = (url) => {
-
-  // TODO: make use of the token if set...
-  const token = localStorage.getItem(GITHUB_TOKEN_KEY) || githubToken;
-  const pullRequestRequest = new Request(url)
-  fetch(pullRequestRequest)
-    .then(checkGitHubStatus)
-    .then(parseJSON)
-    .then(
-      function(pullRequest) {
-        changedFilesUrl = 'https://api.github.com/repos/' + pullRequest.base.repo.owner.login + '/' + pullRequest.base.repo.name + '/pulls/' + window.location.pathname.split('/')[4] + '/files';
-        const changedFilesRequest = new Request(changedFilesUrl)
-        fetch(changedFilesRequest)
-          .then(checkGitHubStatus)
-          .then(parseJSON)
-          .then(
-            function(changedFiles) {
-              var changedSourceFiles = []
-              var arrayLength = changedFiles.length;
-              for (var i = 0; i < arrayLength; i++) {
-                changedSourceFiles.push(changedFiles[i]['filename']);
-              }
-              fetchStriffMetadata(pullRequest, changedSourceFiles);
-            }
-          )
-          .catch(function(err) {
-            console.log(err);
-            showFailure();
-          });
-      }
-    )
-    .catch(function(err) {
-      console.log(err);
-      showFailure();
-    });
-}
-
-const getFileName = (text) => text.trim().split('/')[0]
+};
 
 const checkForPullRequestPage = () => {
-  let repoURI = window.location.pathname.substring(1)
-  if (repoURI.match(/.*\/pull\/[0-9]*/)) {
-    // the current page represets a GitHub Pull Request
-
-    // ensure structure-diff btn does not already exist.
-    var structureDiffButton = document.getElementById("structure_diff_btn");
-    if (structureDiffButton !== null) {
-      document.getElementById("structure_diff_btn").outerHTML = '';
+  let repoURI = window.location.pathname.substring(1);
+  if (
+    repoURI.match(/.*\/pull\/[0-9]*/) &&
+    window.location.href.includes("github.com")
+  ) {
+    // Current page is GitHub Pull Request, retrieve important values
+    repoOwner = window.location.pathname.split("/")[1];
+    repoName = window.location.pathname.split("/")[2];
+    pullNo = window.location.pathname.split("/")[4];
+    // Create striff button
+    var striffTabNav = document.getElementById("striffTabNav");
+    if (striffTabNav == null) {
+      var ghTabNavs = document.getElementsByClassName("tabnav-tabs")[0];
+      var imageURL = chrome.runtime.getURL("icons/clarity-bot.svg");
+      ghTabNavs.innerHTML +=
+        '<button type="submit" class="btn btn-sm btn-with-count js-toggler-target" aria-label="View striff diagrams for this pull request." title="View striff diagrams for this pull request." id="striff_btn" style="margin-left: 15px;padding-left: 5px; min-width:110px; padding-right:15px; overflow: hidden; border-radius: 5px; margin-bottom: 10px; margin-top: 7px; background-color: #f3f3f3; float: right; margin-left: auto;"> <div id="striff_btn_div" style="margin-right: 5px; margin-left: 5px;"><div id="striff_btn_icon_div"><img style="float:left; display:block; margin-top: 2px;margin-bottom: -2px;margin-right: 5px;" id="structure_diff_btn_img" src="' +
+        imageURL +
+        '"></div><span style="padding-right: 5px;" id="striff_btn_text">Striff Report</span></div></button>';
     }
-
-    // retrieve important values
-    var repoOwner = window.location.pathname.split('/')[1];
-    var repoName = window.location.pathname.split('/')[2];
-    var issueNo = window.location.pathname.split('/')[4];
-
-    // create and append the structure-diff button to the page
-    var topButtonList = document.getElementsByClassName("pagehead-actions")[0];
-    var structureDiffButton = document.getElementsByClassName("btn btn-sm btn-with-count")[1].cloneNode(true);
-    structureDiffButton.removeAttribute('data-ga-click');
-    structureDiffButton.setAttribute('title', 'Generate a structure-diff for this pull request');
-    structureDiffButton.setAttribute('href', '#structure-diff-box');
-    structureDiffButton.setAttribute('aria-label', 'Generate a structure-diff for this pull request');
-    structureDiffButton.setAttribute('id', 'structure_diff_btn');
-    var imageURL = chrome.runtime.getURL("icons/clarity-bot.svg");
-    structureDiffButton.innerHTML = '<div style="display:inline-block; border-radius:50%; margin-right: 2px;" id="sdImage"><img style="width: 16px; margin-top: 2px;margin-bottom: -2px;" src="' + imageURL + '"></div> Structure-Diff';
-    var li = document.createElement("li");
-    li.appendChild(structureDiffButton);
-    topButtonList.appendChild(li);
-
     // create event listener for the structure-diff button
-    structureDiffButton.addEventListener('click', function() {
-
-      showLoader();
+    var striffBtn = document.getElementById("striff_btn");
+    striffBtn.addEventListener("click", function () {
+      showLoaderBtnIcon();
       // start generating structure-diff...
-      githubPullRequest('https://api.github.com/repos/' + repoOwner + '/' + repoName + '/pulls/' + issueNo);
+      fetchStriffMetadata(repoOwner, repoName, pullNo);
     });
   }
+};
 
-}
+const setButtonIcon = (type) => {
+  if (type === "success") {
+    showSuccessBtnIcon();
+  } else if (type === "failure") {
+    showFailureBtnIcon();
+  } else if (type === "loading") {
+    showLoaderBtnIcon();
+  } else if (type === "no_change") {
+    showNoChangesBtnIcon();
+  }
+};
 
-const showLoader = () => {
-  var imageHolder = document.getElementById("sdImage");
-  imageHolder.innerHTML = YELLOW_CIRCLE;
-  imageHolder.className += "button-glow"
-  imageHolder.style.backgroundColor = "rgb(219, 171, 9)";
-  setButtonHoverMessage("Your structure-diff is being generated...")
+const updateStriffBtn = (btnText, hoverText, status) => {
+  var striffBtn = document.getElementById("striff_btn");
+  striffBtn.setAttribute("aria-label", hoverText);
+  striffBtn.setAttribute("title", hoverText);
+  var striffBtnText = document.getElementById("striff_btn_text");
+  striffBtnText.innerHTML = btnText;
+  setButtonIcon(status);
+};
 
-}
-
-
-const showSuccess = () => {
-  var imageHolder = document.getElementById("sdImage");
-  imageHolder.innerHTML = GREEN_CHECK_MARK;
-  imageHolder.className -= "button-glow"
-  imageHolder.style.backgroundColor = "transparent";
-  setButtonHoverMessage("Your structure-diff was successfully generated.")
-}
-
-const showFailure = () => {
-  var imageHolder = document.getElementById("sdImage");
-  imageHolder.innerHTML = RED_CROSS;
-  imageHolder.className -= "button-glow"
-  imageHolder.style.backgroundColor = "transparent";
-}
-
-const setButtonHoverMessage = (message) => {
-  var structureDiffButton = document.getElementById("structure_diff_btn");
-  structureDiffButton.setAttribute('aria-label', message);
-  structureDiffButton.setAttribute('title', message);
-}
-
-const displayResult = (diffId) => {
-  showSuccess();
+const displayStriffs = (striffRespJson) => {
   chrome.extension.sendMessage({
-    msg: ["openTab", CLARITY_BOT_STRUCTURE_DIFF_API + '/' + diffId]
+    msg: ["openStriffTab", generateStriffHTML(striffRespJson)],
   });
-}
+};
 
+const generateStriffHTML = (striffRespJson) => {
+  var htmlText = REPORT_HEADER;
+  for (var language in striffRespJson.striffsMap) {
+    if (striffRespJson.striffsMap.hasOwnProperty(language)) {
+      htmlText +=
+        "<h1>" +
+        repoOwner +
+        "/" +
+        repoName +
+        '<span style="color:grey"> Pull #' +
+        pullNo +
+        "</span>" +
+        "</h1>" +
+        "<h3>" +
+        "<code>" +
+        language.charAt(0).toUpperCase() +
+        language.slice(1) +
+        "</code>" +
+        " Striff Diagrams</h3>";
+      for (striffObjIdx in striffRespJson.striffsMap[language]) {
+        htmlText += '<div class="striff">' +
+          striffRespJson.striffsMap[language][striffObjIdx][
+            "base64encodedSVGCode"
+          ] + "</div>"
+      }
+    }
+  }
+  htmlText += REPORT_FOOTER;
+  return htmlText;
+};
 
-storage.get(GITHUB_TOKEN_KEY, function(data) {
-  githubToken = data[GITHUB_TOKEN_KEY]
+storage.get(GITHUB_TOKEN_KEY, function (data) {
+  githubToken = data[GITHUB_TOKEN_KEY];
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (changes[GITHUB_TOKEN_KEY]) {
-      githubToken = changes[GITHUB_TOKEN_KEY].newValue
+      githubToken = changes[GITHUB_TOKEN_KEY].newValue;
     }
-  })
-  document.addEventListener('pjax:end', checkForPullRequestPage, false)
-  checkForPullRequestPage()
-})
+  });
+  document.addEventListener("pjax:end", checkForPullRequestPage, false);
+  checkForPullRequestPage();
+});
+
+const token = githubToken || localStorage.getItem(GITHUB_TOKEN_KEY);
+
+const showLoaderBtnIcon = () => {
+  var imageHolder = document.getElementById("striff_btn_icon_div");
+  imageHolder.innerHTML = LOADING_CIRCLE;
+  var striffBtnText = document.getElementById("striff_btn_text");
+  striffBtnText.innerHTML = "Generating";
+};
+
+const showSuccessBtnIcon = () => {
+  var imageHolder = document.getElementById("striff_btn_icon_div");
+  imageHolder.innerHTML = GREEN_CHECK_MARK;
+};
+
+const showFailureBtnIcon = () => {
+  var imageHolder = document.getElementById("striff_btn_icon_div");
+  imageHolder.innerHTML = FAILURE_ICON;
+};
+
+const showNoChangesBtnIcon = () => {
+  var imageHolder = document.getElementById("striff_btn_icon_div");
+  imageHolder.innerHTML = NOCHANGE_ICON;
+};
+
+// investigate https://github.com/caddyserver/caddy/pull/3712
