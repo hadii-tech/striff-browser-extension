@@ -171,6 +171,7 @@ const generateStriffHTML = (striffRespJson) => {
         pullNo +
         "</span>" +
         "</h1>" +
+        "<p>Learn more about striff diagrams at <a target=\"_blank\" href=\"https://striff.io\">striff.io</a></p>" +
         "<h3>" +
         "<code>" +
         language.charAt(0).toUpperCase() +
