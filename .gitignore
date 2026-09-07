@@ -38,3 +38,9 @@ html/config-local-test.json
 preview-menu.png
 *.png
 !icons/*.png
+
+# Playwright/Chrome profiles created by test runs. The three .pw-profile patterns
+# above miss a doubled test/test/ path, which is how 19MB of browser profile --
+# including Chrome's (empty) Cookies and Login Data stores -- reached a public repo.
+test/test/
+**/.pw-profile*/
