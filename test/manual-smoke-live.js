@@ -159,19 +159,20 @@ const shouldSkipLiveAiReview = (result) => {
   const status = String(result.status || result.lastStatus || '').trim().toUpperCase();
   const errorCode = String(result.errorCode || '').trim().toUpperCase();
   const errorMessage = String(result.errorMessage || '').trim();
+  // Terminal states in which the backend declined to review at all. A READY review that surfaced
+  // nothing is deliberately NOT one of them: it ran, so everything about it that does not depend on
+  // the model's judgment is still worth asserting, and only the note assertion is skipped.
+  //
+  // The old (reason === 'timeout' && status === 'NOT_REQUESTED') clause could never fire, the
+  // NOT_REQUESTED test above it already covering that. SKIPPED was never handled at all, so the
+  // backend declining a trivial pull request was reported as a failure.
   return (
     status === 'NOT_REQUESTED' ||
-    (reason === 'timeout' && status === 'NOT_REQUESTED') ||
+    status === 'SKIPPED' ||
     (reason === 'review-failed' && /disabled|not requested/i.test(errorMessage)) ||
     (reason === 'review-failed' &&
       errorCode === 'INTERNAL_ERROR' &&
-      /agent call failed with status 403/i.test(errorMessage)) ||
-    // A completed (READY) review legitimately produces zero surfaced notes when
-    // the diff is too trivial to flag anything (e.g. whitespace-only or a couple
-    // of small additions) — this is a valid backend outcome, not a broken
-    // extension. Asserting "at least one note" against a fixed low-signal PR
-    // fixture makes this flaky whenever the AI review model's judgment shifts.
-    (reason === 'ready-no-notes' && status === 'READY')
+      /agent call failed with status 403/i.test(errorMessage))
   );
 };
 
@@ -322,11 +323,24 @@ async function exportLoginProfileCookies() {
 (async () => {
   let ok = true;
   let chromeLaunched = false;
+  let passCount = 0;
+  const failures = [];
+  const skips = [];
+  // A skipped assertion is not a passed one. Without a count of its own a suppressed check is
+  // invisible in an "N passed, 0 failed" tally.
+  const skip = (msg) => {
+    skips.push(msg);
+    log('⊘ SKIPPED', msg);
+  };
   const fail = (msg) => {
     ok = false;
+    failures.push(msg);
     err('✗', msg);
   };
-  const pass = (msg) => log('✓', msg);
+  const pass = (msg) => {
+    passCount += 1;
+    log('✓', msg);
+  };
   const ensureCleanup = () => {
     if (chromeLaunched) {
       try { chromeCleanup(); } catch {}
@@ -2206,13 +2220,32 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     }, null, { timeout: timeoutMs, polling: 200 }).catch(() => null);
   };
   const liveAiReviewResult = await runStriffsTestHook('runLiveAiReviewCheck', { timeoutMs: 180000 }, 190000);
-  const skipLiveAiReviewCheck = shouldSkipLiveAiReview(liveAiReviewResult);
-  if (skipLiveAiReviewCheck) {
-    warn(`Skipping live AI review check (${JSON.stringify(liveAiReviewResult)})`);
+  const liveAiReviewStatus = String(liveAiReviewResult?.status || '').trim().toUpperCase();
+  if (shouldSkipLiveAiReview(liveAiReviewResult)) {
+    skip(`Live AI review: backend declined to review this PR (${JSON.stringify(liveAiReviewResult)})`);
   } else if (!liveAiReviewResult?.ok) {
-    fail(`Live AI review check failed (${JSON.stringify(liveAiReviewResult)})`);
+    fail(`Live AI review poll failed (${JSON.stringify(liveAiReviewResult)})`);
+  } else if (liveAiReviewStatus !== 'READY') {
+    fail(`Live AI review ended in an unexpected state (${JSON.stringify(liveAiReviewResult)})`);
   } else {
-    pass('Live AI review returns a changed SVG with at least one AI review note');
+    // Deterministic: the review ran and handed back a diagram the extension could swap in.
+    if (liveAiReviewResult.changed) {
+      pass('Live AI review reaches READY and returns an updated diagram');
+    } else {
+      fail(`Live AI review reached READY without changing the diagram (${JSON.stringify(liveAiReviewResult)})`);
+    }
+    // Judgment-dependent: assert the surfaced-item to SVG-note mapping only when the backend
+    // actually surfaced something. Asserting a note unconditionally tested the model rather than
+    // our rendering, which is why the whole block used to be skipped to stop it flaking.
+    if (liveAiReviewResult.surfacedCount > 0) {
+      if (liveAiReviewResult.hasNote) {
+        pass(`Surfaced review items are drawn as notes on the diagram (${liveAiReviewResult.surfacedCount} surfaced)`);
+      } else {
+        fail(`Backend surfaced ${liveAiReviewResult.surfacedCount} review item(s) but the diagram drew no note`);
+      }
+    } else {
+      skip('AI review note rendering: backend surfaced no review items for this PR');
+    }
 
     // These assert against the real API response rather than a fixture, so they are the only
     // check that the server is still sending what the panel is built to render.
@@ -4914,6 +4947,12 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   } else {
     pass('Striffs/Diffs buttons hidden on conversation tab');
   }
+
+  log('='.repeat(60));
+  log(`Summary: ${passCount} passed, ${failures.length} failed, ${skips.length} skipped`);
+  for (const m of skips) log(`  ⊘ ${m}`);
+  for (const m of failures) log(`  ✗ ${m}`);
+  log('='.repeat(60));
 
   // Close on success; leave open on failure or if KEEP_OPEN set
   if (ok && !process.env.KEEP_OPEN) {
