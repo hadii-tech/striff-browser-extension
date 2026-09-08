@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
+
+- Connecting a GitHub token no longer puts a cold analysis on the slower path. Public pull
+  requests now go through the queued, polled upload route regardless of whether a token is stored;
+  the token GET held a socket open for the whole analysis, measured at 177-483 seconds against a
+  180-second budget, so it could expire before the server finished. The token still carries private
+  repositories, changed-file metadata read from the API rather than scraped from the page, and the
+  fallback when an upload is refused for size.
+- A pull request too large for the upload path now offers to connect a GitHub token. The refusal
+  the API actually returns was matched by neither arm of the check, so the one case a token fixes
+  reported a bare "API request failed 413" and offered nothing.
+- An architecture review that ends without being authorised now says so and stops, instead of
+  retrying the same rejected request every five seconds until it times out.
+- `[Striffs]` warnings for conditions the extension already handled - a remote config that did not
+  answer, a prefetch that timed out, a cache read that fell back - no longer appear in the console
+  unless debug logging is on.
 
 - Documented rules render from the status the server actually sends. The panel had been splitting
   rows on a `tier` the API stopped sending and checking for a `RAISED` status it stopped producing,
