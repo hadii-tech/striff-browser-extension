@@ -948,7 +948,11 @@
   // ---------- Logging ----------
   S.clog = (...a) => { try { if (S.isDebug?.()) console.log('[Striffs]', ...a); } catch { } };
   S.cinfo = (...a) => { try { if (S.isDebug?.()) console.info('[Striffs]', ...a); } catch { } };
-  S.cwarn = (...a) => { try { console.warn('[Striffs]', ...a); } catch { } };
+  // Gated, per docs/CODE_REVIEW_PLAN.md §3 option (a). cwarn is where this file reports what it has
+  // already handled -- a remote config that did not answer, a prefetch that timed out, a cache read
+  // that fell back -- and none of that is the user's console to fill. cerr below stays
+  // unconditional, for a failure nothing handled.
+  S.cwarn = (...a) => { try { if (S.isDebug?.()) console.warn('[Striffs]', ...a); } catch { } };
   S.cerr = (...a) => { try { console.error('[Striffs]', ...a); } catch { } };
   S.debugDump = (label, payload) => {
     try {
@@ -4680,10 +4684,6 @@
     S.__striffsComponentIdToSvgElement.clear();
     if (!S.__striffsSvg) return;
 
-    // Debug: Check what's actually in the SVG
-    if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] SVG qualified-name count", S.__striffsSvg.querySelectorAll('[data-qualified-name]').length);
-    }
 
     // The SVG should already have data-qualified-name attributes on entity elements
     // Build a map of qualified names to SVG elements
@@ -4696,32 +4696,30 @@
       }
     }
 
-    // Debug: Show what we found
+    const items = Array.isArray(apiData?.striffs) ? apiData.striffs : [];
+
+    // What the SVG offered and what the API sent, in one entry: they are only useful read together,
+    // and four lines per render made the console unreadable.
     if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] SVG elements with data-qualified-name:", Array.from(svgEntityMap.keys()).slice(0, 10));
-      // Also check entity elements
       const entityElements = S.__striffsSvg.querySelectorAll('g[class*="entity"], g.entity');
-      S.clog?.("[buildPathIdMapping] Entity elements found:", entityElements.length,
-        "sample attributes:", Array.from(entityElements).slice(0, 3).map((el) => ({
+      S.debugDump?.("buildPathIdMapping inputs", {
+        svgQualifiedNameCount: S.__striffsSvg.querySelectorAll('[data-qualified-name]').length,
+        svgQualifiedNames: Array.from(svgEntityMap.keys()).slice(0, 10),
+        entityElementCount: entityElements.length,
+        entitySample: Array.from(entityElements).slice(0, 3).map((el) => ({
           id: el.id,
           class: el.className,
           hasDataQName: el.hasAttribute('data-qualified-name'),
           dataQName: el.getAttribute('data-qualified-name')
-        }))
-      );
-    }
-
-    const items = Array.isArray(apiData?.striffs) ? apiData.striffs : [];
-
-    // Debug: Check API response structure
-    if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] API response structure:", {
-        hasStriffs: Array.isArray(apiData?.striffs),
-        striffsCount: items.length,
-        firstItemKeys: items[0] ? Object.keys(items[0]) : [],
-        hasComponents: items[0] ? ('components' in items[0]) : false,
-        componentsValue: items[0]?.components,
-        sampleComponent: items[0]?.components?.[0]
+        })),
+        api: {
+          hasStriffs: Array.isArray(apiData?.striffs),
+          striffsCount: items.length,
+          firstItemKeys: items[0] ? Object.keys(items[0]) : [],
+          hasComponents: items[0] ? ('components' in items[0]) : false,
+          componentsValue: items[0]?.components,
+          sampleComponent: items[0]?.components?.[0]
+        }
       });
     }
 
@@ -4797,28 +4795,31 @@
 
     // Always log the path->component mapping for debugging file tree clicks (only in debug mode)
     if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] Path to component map:", Array.from(S.__striffsPathToComponentId.entries()));
-      S.clog?.("[buildPathIdMapping] Components missing from SVG:", missingInSvg);
+      S.debugDump?.("pathIdMapping", {
+        pathToComponent: Array.from(S.__striffsPathToComponentId.entries()),
+        componentsMissingFromSvg: missingInSvg
+      });
     }
 
     if (debugEnabled) {
+      // One structured dump rather than eight lines. Still callable by hand from DevTools, where the
+      // object is expandable, which is how anyone actually reads these.
       S.dumpStriffsMaps = () => {
         try {
-          S.clog?.("[map] api components (component->file)", S.__debugApiComponents);
-          S.clog?.("[map] api files", S.__debugApiFiles);
-          S.clog?.("[map] componentsDump", S.__debugComponentsDump);
-          S.clog?.("[map] path->component", S.__debugPathToComponent);
-          S.clog?.("[map] component->file", S.__debugComponentToFile);
-          S.clog?.("[map] file->diff", S.__debugFilePathToDiffHash);
-          S.clog?.("[map] diff->file", S.__debugDiffHashToFilePath);
+          S.debugDump?.("striffs maps", {
+            apiComponents: S.__debugApiComponents,
+            apiFiles: S.__debugApiFiles,
+            componentsDump: S.__debugComponentsDump,
+            pathToComponent: S.__debugPathToComponent,
+            componentToFile: S.__debugComponentToFile,
+            fileToDiff: S.__debugFilePathToDiffHash,
+            diffToFile: S.__debugDiffHashToFilePath,
+            componentIdToFile: S.__striffsComponentIdToFile
+          });
         } catch (e) {
           S.cwarn?.("dumpStriffsMaps failed", e);
         }
       };
-      // Emit the live map for quick inspection in DevTools.
-      try {
-        S.clog?.("[map] __striffsComponentIdToFile (Map)", S.__striffsComponentIdToFile);
-      } catch {}
       S.dumpStriffsMaps(); // log immediately after building the map
 
       try {
