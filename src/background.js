@@ -42,23 +42,9 @@ const debugLog = (...a) => {
 loadDebugFlag();
 migrateLegacyTokenFromLocal().then(() => broadcastTokenState()).catch(() => {});
 
-const normalizeApiBase = BgUtils.normalizeApiBase || ((base) => String(base || '').trim().replace(/\/+$/, ''));
-const buildGitHubPrefetchUrl = BgUtils.buildGitHubPrefetchUrl || ((apiBase, owner, repo, pullNumber, updatedAt) => {
-  const base = normalizeApiBase(apiBase);
-  if (!base) return '';
-  return `${base}/api/v1/github/striffs/prefetch/owners/${encodeURIComponent(owner || '')}/repos/${encodeURIComponent(repo || '')}/pulls/${encodeURIComponent(pullNumber || '')}?updated_at=${encodeURIComponent(updatedAt || '')}`;
-});
-const buildArtifactPrefetchUrl = BgUtils.buildArtifactPrefetchUrl || ((apiBase, { owner = '', repo = '', pullNumber = '', updatedAt = '' } = {}) => {
-  const base = normalizeApiBase(apiBase);
-  if (!base) return '';
-  const params = new URLSearchParams();
-  if (updatedAt) params.set('updated_at', updatedAt);
-  if (owner) params.set('owner', owner);
-  if (repo) params.set('repo', repo);
-  if (pullNumber) params.set('pull_number', pullNumber);
-  const query = params.toString();
-  return `${base}/api/v1/github/striffs/prefetch-artifacts${query ? `?${query}` : ''}`;
-});
+const normalizeApiBase = BgUtils.normalizeApiBase;
+const buildGitHubPrefetchUrl = BgUtils.buildGitHubPrefetchUrl;
+const buildArtifactPrefetchUrl = BgUtils.buildArtifactPrefetchUrl;
 
 function abortableTimeout(ms) {
   const ctrl = new AbortController();
@@ -88,16 +74,8 @@ async function getApiBase(defaultBase = DEV_DEFAULT_API_BASE) {
   return normalizeApiBase(defaultBase);
 }
 
-const STATIC_PROXY_HOSTS = BgUtils.STATIC_PROXY_HOSTS || new Set([
-  'api.github.com',
-  'codeload.github.com',
-  'raw.githubusercontent.com',
-  'striffs-config.tor1.cdn.digitaloceanspaces.com'
-]);
-const isLoopbackHostname = BgUtils.isLoopbackHostname || ((hostname) => {
-  const host = String(hostname || '').toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1';
-});
+const STATIC_PROXY_HOSTS = BgUtils.STATIC_PROXY_HOSTS;
+const isLoopbackHostname = BgUtils.isLoopbackHostname;
 
 async function isAllowedProxyUrl(rawUrl) {
   const apiBase = await getApiBase();
@@ -255,21 +233,7 @@ async function downloadRepoZipAsArrayBuffer(owner, repo, ref, apiBase) {
   return { ok: true, arrayBuffer: filtered.buffer, fromCache: false };
 }
 
-const readApiErrorResponse = BgUtils.readApiErrorResponse || (async (res) => {
-  const text = await res.text().catch(() => '');
-  let error = text || `API request failed: ${res.status}`;
-  let errorCode = null;
-  try {
-    const json = JSON.parse(text);
-    if (json?.errorMessage) error = json.errorMessage;
-    if (json?.errorCode) errorCode = json.errorCode;
-  } catch {}
-  return {
-    detail: text,
-    error,
-    errorCode
-  };
-});
+const readApiErrorResponse = BgUtils.readApiErrorResponse;
 
 async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { timeoutMs = 120000, apiBase = '' } = {}) {
   const sanitizedChangedFiles = sanitizeChangedFilesPayload(changedFiles);
@@ -343,23 +307,13 @@ function sanitizeChangedFilesPayload(changedFiles = []) {
     .filter(Boolean);
 }
 
-const CACHE_PREFIXES = BgUtils.CACHE_PREFIXES || ["striffs:", "striffscache:", "striffscachemeta:"];
-const CLEAR_FLAG_KEY = BgUtils.CLEAR_FLAG_KEY || "striffsCacheClearAt";
-const CACHE_CLEAR_SEEN_KEY = BgUtils.CACHE_CLEAR_SEEN_KEY || "striffsCacheClearSeenAt";
-const DEBUG_FLAG_KEY = BgUtils.DEBUG_FLAG_KEY || "striffsDebug";
-const TEMP_RESPONSE_PREFIX = BgUtils.TEMP_RESPONSE_PREFIX || "striffsTempResponse:";
-const TEMP_CHANGED_FILES_PREFIX = BgUtils.TEMP_CHANGED_FILES_PREFIX || "striffsTempChangedFiles:";
-const CACHE_KEYS = BgUtils.CACHE_KEYS || [
-  "striffsActiveTab",
-  "striffsRemoteConfig",
-  "striffsRemoteConfigFetchedAt",
-  "striffsRemoteConfigUrl",
-  "striffsSupportedLangs",
-  "striffsSupportedLangsFetchedAt",
-  "striffsSupportedLangsBase",
-  "striffsConfigUrl",
-  "striffsApiBase"
-];
+const CACHE_PREFIXES = BgUtils.CACHE_PREFIXES;
+const CLEAR_FLAG_KEY = BgUtils.CLEAR_FLAG_KEY;
+const CACHE_CLEAR_SEEN_KEY = BgUtils.CACHE_CLEAR_SEEN_KEY;
+const DEBUG_FLAG_KEY = BgUtils.DEBUG_FLAG_KEY;
+const TEMP_RESPONSE_PREFIX = BgUtils.TEMP_RESPONSE_PREFIX;
+const TEMP_CHANGED_FILES_PREFIX = BgUtils.TEMP_CHANGED_FILES_PREFIX;
+const CACHE_KEYS = BgUtils.CACHE_KEYS;
 
 async function storeTempResponsePayload(json) {
   const key = `${TEMP_RESPONSE_PREFIX}${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -427,9 +381,7 @@ async function cleanupOrphanedTempKeys() {
   }
 }
 
-const isGithubPullRequestUrl = BgUtils.isGithubPullRequestUrl || ((url) =>
-  /^https?:\/\/(?:[^/]+\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+(?:\/.*)?$/i.test(String(url || ""))
-);
+const isGithubPullRequestUrl = BgUtils.isGithubPullRequestUrl;
 
 async function clearGithubLocalStorages({ senderTabId = null, senderUrl = "" } = {}) {
   try {

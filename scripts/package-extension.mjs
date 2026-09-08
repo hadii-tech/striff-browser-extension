@@ -123,6 +123,10 @@ await rewriteFile('src/background.js', stripBackgroundRuntimeOverrides, {
 });
 await rewriteFile('src/background.js', stripOverrideCacheKeys, {
   description: 'background override cache keys',
+  // The CACHE_KEYS list lives only in background-utils.js now -- stripped just below -- so there is
+  // nothing here left to rewrite. The assertion stays, because it is what proves the override keys
+  // are absent from what ships and it would catch a copy reappearing here.
+  mustChange: false,
   mustNotContain: ['"striffsConfigUrl"', '"striffsApiBase"']
 });
 await rewriteFile('src/background-utils.js', stripOverrideCacheKeys, {
