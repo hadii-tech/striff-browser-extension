@@ -33,13 +33,22 @@
     message: 7000,
     ping: 1000,
     waitForToolbar: 8000,
-    bgGenerate: 180000,
+    // The upload path is queued and polled to completion in the background (ADR-035), so this must
+    // cover a full analysis (measured 177-483s) plus polling overhead, not just a single POST.
+    bgGenerate: 360000,
     bgToken: 180000,
     bgPrefetch: 30000,
     bgArtifactPrefetch: 180000,
   });
   S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES = 50;
   S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES_BYTES = 15 * 1024 * 1024;
+
+  // Route the common (public-repo) analysis through the queued, polled upload path instead of the
+  // synchronous server-fetch GET. The upload is filtered to the files the analysis reads and then
+  // queued, while the GET holds a socket open for an analysis measured at 177-483s against a
+  // bgToken budget of 180s -- so a stored token was putting a cold analysis on the slower path and
+  // the one that can time out before the server finishes. See requestPrimary.
+  S.POST_PRIMARY_ENABLED = true;
 
   S.DEFAULT_SUPPORTED_EXTS = ['java', 'ts', 'py'];
 
@@ -9914,12 +9923,52 @@
   // in ZIP_REDUCE_SCOPE_ERROR_CODES and a message saying "file" where the pattern below wants "zip
   // entry" -- so both arms missed it and the one refusal a token actually fixes was the one that
   // offered no token. Observed on iluwatar/java-design-patterns#3601.
+  // A failure from the upload path meaning "this PR is too big for the ZIP route" -- the case where
+  // the server-side token GET, which fetches without a client-side download and has no changed-file
+  // cap, is the right fallback.
+  function isUploadPathTooLargeError(err) {
+    const code = String(err?.errorCode || '').trim().toUpperCase();
+    if (ZIP_LIMIT_ERROR_CODES.has(code) || ZIP_REDUCE_SCOPE_ERROR_CODES.has(code)) return true;
+    if (Number(err?.status || 0) === 413) return true;
+    return /zip entry exceeds maximum allowed size|uploaded file exceeds the maximum allowed size|too many changes|request too large|repo(sitory)? (is )?too large|too large for the zip generation path/i
+      .test(String(err?.message || ''));
+  }
+
+  // The single analysis entry point.
+  //
+  // The upload (POST) path is queued and polled to completion in the background, so it is preferred:
+  // it downloads the base ZIP from codeload unauthenticated and filters it to what the analysis
+  // reads, which means it needs no credential and holds no socket. It only works on public
+  // repositories for exactly that reason -- a private repo can only be fetched server-side with the
+  // user's token, which is also the fallback when an upload is refused for size.
+  //
+  // So: private repo -> token GET; public repo -> upload, with token GET as the size fallback.
+  async function requestPrimary(meta, token, { quiet = false } = {}) {
+    const postPrimary = S.POST_PRIMARY_ENABLED === true && !S.isPrivateRepo?.();
+    if (!postPrimary) {
+      return token
+        ? await requestWithToken(token, meta, { quiet })
+        : await requestWithZips(meta, { quiet });
+    }
+    try {
+      return await requestWithZips(meta, { quiet });
+    } catch (err) {
+      if (token && isUploadPathTooLargeError(err)) {
+        S.cinfo?.('Upload path refused for size; falling back to token GET', {
+          errorCode: err?.errorCode || null,
+          status: err?.status || null
+        });
+        return await requestWithToken(token, meta, { quiet });
+      }
+      throw err;
+    }
+  }
+
+  // One notion of "too big for the upload path", shared with the fallback in requestPrimary above
+  // rather than restated here, so the two cannot drift apart again.
   const shouldPromptForTokenForZipLimit = ({ token, status, errorCode, message }) => {
     if (token) return false;
-    const code = String(errorCode || '').trim().toUpperCase();
-    if (code && (ZIP_LIMIT_ERROR_CODES.has(code) || ZIP_REDUCE_SCOPE_ERROR_CODES.has(code))) return true;
-    if (!(status === 400 || status === 413)) return false;
-    return /zip entry exceeds maximum allowed size|uploaded file exceeds the maximum allowed size|too many changes|request too large|repo(sitory)? (is )?too large/i.test(String(message || ''));
+    return isUploadPathTooLargeError({ status, errorCode, message });
   };
 
   const extractHumanMessage = (raw) => {
@@ -10068,11 +10117,7 @@
           });
           return false;
         }
-        const fetchFreshResult = async () => (
-          token
-            ? await requestWithToken(token, meta, { quiet: true })
-            : await requestWithZips(meta, { quiet: true })
-        );
+        const fetchFreshResult = async () => await requestPrimary(meta, token, { quiet: true });
         let result = null;
         let lastError = null;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -10274,7 +10319,7 @@
         }
 
         if (!result) {
-          result = token ? await requestWithToken(token, meta) : await requestWithZips(meta);
+          result = await requestPrimary(meta, token);
         }
 
         await renderStriffsResult(result, meta, { fromCache });

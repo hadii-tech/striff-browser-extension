@@ -3245,14 +3245,20 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   }
 
   if (tokenProvided) {
+    // POST-primary routes every public repository down the upload path whether or not a token is
+    // stored: that upload is filtered to the files the analysis reads and then queued and polled,
+    // while the token GET holds a socket open for an analysis measured at 177-483s against a 180s
+    // budget. The token still carries private repositories, the changed-file metadata resolved from
+    // the API rather than the DOM, and the fallback when an upload is refused for size -- it is just
+    // no longer what decides the primary request on a public pull request.
     const reqType = await page.evaluate(() =>
       document.documentElement?.dataset?.striffsLastRequestType || ''
     ).catch(() => '');
-    if (reqType !== 'token') {
-      fail(`Expected token-backed request, got "${reqType || 'unknown'}"`);
+    if (reqType !== 'zips') {
+      fail(`Expected the upload path on a public PR under POST-primary, got "${reqType || 'unknown'}"`);
       warn('Continuing despite request type failure');
     } else {
-      pass('Token-backed request path used');
+      pass('Public PR uses the upload path even when a token is stored');
     }
   }
 
@@ -4203,15 +4209,18 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   }
 
   if (tokenProvided) {
+    // The primary request is the upload path now, so it no longer demonstrates that a stored token
+    // reaches GitHub. Assert that where the token is still what makes the call possible: the
+    // token-backed prefetch, and the PR file metadata fetched from the API rather than scraped.
     const tokenPathSeen = bgLogs.some((l) =>
-      /fetchStriffsWithToken|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
+      /prefetchStriffsWithToken|fetchStriffsWithToken|mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     ) || pageLogs.some((l) =>
-      /Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
+      /mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     );
     if (tokenPathSeen) {
-      pass('Token-protected API path observed (fetchStriffsWithToken)');
+      pass('Stored token still reaches GitHub on a token-only path');
     } else {
-      fail('GH_TOKEN provided but no token-based API call observed (expected fetchStriffsWithToken log)');
+      fail('GH_TOKEN provided but no token-backed GitHub call observed on any path');
     }
   }
 
