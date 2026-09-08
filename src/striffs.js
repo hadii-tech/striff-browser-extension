@@ -9908,11 +9908,17 @@
     ...ZIP_LIMIT_ERROR_CODES
   ]);
 
+  // Both sets, not just the first. The server answers an oversized upload with 413
+  // ZIP_UPLOAD_TOO_LARGE and "Uploaded file exceeds the maximum allowed size." -- a code that lives
+  // in ZIP_REDUCE_SCOPE_ERROR_CODES and a message saying "file" where the pattern below wants "zip
+  // entry" -- so both arms missed it and the one refusal a token actually fixes was the one that
+  // offered no token. Observed on iluwatar/java-design-patterns#3601.
   const shouldPromptForTokenForZipLimit = ({ token, status, errorCode, message }) => {
     if (token) return false;
-    if (errorCode && ZIP_LIMIT_ERROR_CODES.has(String(errorCode).trim().toUpperCase())) return true;
+    const code = String(errorCode || '').trim().toUpperCase();
+    if (code && (ZIP_LIMIT_ERROR_CODES.has(code) || ZIP_REDUCE_SCOPE_ERROR_CODES.has(code))) return true;
     if (!(status === 400 || status === 413)) return false;
-    return /zip entry exceeds maximum allowed size|too many changes|request too large|repo too large|repository is too large/i.test(String(message || ''));
+    return /zip entry exceeds maximum allowed size|uploaded file exceeds the maximum allowed size|too many changes|request too large|repo(sitory)? (is )?too large/i.test(String(message || ''));
   };
 
   const extractHumanMessage = (raw) => {
