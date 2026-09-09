@@ -28,7 +28,7 @@
  *    - On READY, response includes enriched striffs array
  *    - Extension swaps SVG with enriched version
  *    - Verify enriched SVG contains AI_REVIEW_NOTE_ elements
- *    - Verify button shows "View AI Review" text
+ *    - Verify button shows "View review (N rules)" text
  *    - Verify results panel auto-opens with review summary
  *    - Verify toast notification "Architecture review complete."
  *
@@ -2782,11 +2782,13 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     }
     pass('AI Review button triggers enrichment that swaps in enriched SVG on READY');
 
-    if (result.readyOutcome?.archBtnText !== 'View AI Review') {
-      fail(`AI Review button text not "View AI Review" after READY (got "${result.readyOutcome?.archBtnText}", ${JSON.stringify(result.readyOutcome)})`);
+    // The button is re-scoped from a trigger to a view once the review is in hand (#14): after READY
+    // it reads "View review (N rules)", where N is the documented-rule count, not the old "View AI Review".
+    if (!/^View review \(\d+ rules?\)$/.test(result.readyOutcome?.archBtnText || '')) {
+      fail(`AI Review button text not "View review (N rules)" after READY (got "${result.readyOutcome?.archBtnText}", ${JSON.stringify(result.readyOutcome)})`);
       return false;
     }
-    pass('AI Review button shows "View AI Review" after enrichment completes');
+    pass(`AI Review button shows "${result.readyOutcome.archBtnText}" after enrichment completes`);
 
     if (result.readyOutcome?.archBtnDisabled !== false) {
       fail(`AI Review button not re-enabled after READY (${JSON.stringify(result.readyOutcome)})`);
