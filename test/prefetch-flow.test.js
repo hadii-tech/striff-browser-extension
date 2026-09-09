@@ -124,6 +124,58 @@ test('prefetchStriffsWithToken replies ok:false with the status on an API error'
   assert.equal(fetchCalls.length, 1);
 });
 
+test('prefetchStriffsWithToken warms /ai-review when the reply carries op + token + running status', async () => {
+  fetchCalls.length = 0;
+  nextFetchResponse = () =>
+    new Response(
+      JSON.stringify({
+        queued: true,
+        operationId: 'op-9',
+        engagementWriteToken: 'tok-9',
+        aiReviewStatus: 'RUNNING',
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+
+  const reply = await dispatch({
+    type: 'prefetchStriffsWithToken',
+    owner: 'openai',
+    repo: 'demo',
+    pull_number: 123,
+    updated_at: '2026-05-02T10:11:12Z',
+    token: 'tok-123',
+  });
+
+  assert.equal(reply.ok, true);
+  // The prefetch POST, then a best-effort GET warming the review status.
+  assert.equal(fetchCalls.length, 2);
+  const warm = fetchCalls[1];
+  assert.equal(warm.init.method, 'GET');
+  assert.match(warm.url, /\/api\/v1\/striffs\/op-9\/ai-review$/);
+  assert.equal(warm.init.headers['X-Striff-Engagement-Token'], 'tok-9');
+});
+
+test('prefetchStriffsWithToken does not warm /ai-review when the reply lacks op/token', async () => {
+  fetchCalls.length = 0;
+  nextFetchResponse = () =>
+    new Response(JSON.stringify({ queued: true, aiReviewStatus: 'RUNNING' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  const reply = await dispatch({
+    type: 'prefetchStriffsWithToken',
+    owner: 'openai',
+    repo: 'demo',
+    pull_number: 123,
+    updated_at: '2026-05-02T10:11:12Z',
+    token: 'tok-123',
+  });
+
+  assert.equal(reply.ok, true);
+  assert.equal(fetchCalls.length, 1, 'only the prefetch POST should fire');
+});
+
 test('prefetchStriffsWithToken rejects missing args without firing a request', async () => {
   fetchCalls.length = 0;
 

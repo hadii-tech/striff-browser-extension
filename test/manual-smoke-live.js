@@ -28,7 +28,7 @@
  *    - On READY, response includes enriched striffs array
  *    - Extension swaps SVG with enriched version
  *    - Verify enriched SVG contains AI_REVIEW_NOTE_ elements
- *    - Verify button shows "View AI Review" text
+ *    - Verify button shows "View review (N rules)" text
  *    - Verify results panel auto-opens with review summary
  *    - Verify toast notification "Architecture review complete."
  *
@@ -159,19 +159,20 @@ const shouldSkipLiveAiReview = (result) => {
   const status = String(result.status || result.lastStatus || '').trim().toUpperCase();
   const errorCode = String(result.errorCode || '').trim().toUpperCase();
   const errorMessage = String(result.errorMessage || '').trim();
+  // Terminal states in which the backend declined to review at all. A READY review that surfaced
+  // nothing is deliberately NOT one of them: it ran, so everything about it that does not depend on
+  // the model's judgment is still worth asserting, and only the note assertion is skipped.
+  //
+  // The old (reason === 'timeout' && status === 'NOT_REQUESTED') clause could never fire, the
+  // NOT_REQUESTED test above it already covering that. SKIPPED was never handled at all, so the
+  // backend declining a trivial pull request was reported as a failure.
   return (
     status === 'NOT_REQUESTED' ||
-    (reason === 'timeout' && status === 'NOT_REQUESTED') ||
+    status === 'SKIPPED' ||
     (reason === 'review-failed' && /disabled|not requested/i.test(errorMessage)) ||
     (reason === 'review-failed' &&
       errorCode === 'INTERNAL_ERROR' &&
-      /agent call failed with status 403/i.test(errorMessage)) ||
-    // A completed (READY) review legitimately produces zero surfaced notes when
-    // the diff is too trivial to flag anything (e.g. whitespace-only or a couple
-    // of small additions) — this is a valid backend outcome, not a broken
-    // extension. Asserting "at least one note" against a fixed low-signal PR
-    // fixture makes this flaky whenever the AI review model's judgment shifts.
-    (reason === 'ready-no-notes' && status === 'READY')
+      /agent call failed with status 403/i.test(errorMessage))
   );
 };
 
@@ -322,11 +323,24 @@ async function exportLoginProfileCookies() {
 (async () => {
   let ok = true;
   let chromeLaunched = false;
+  let passCount = 0;
+  const failures = [];
+  const skips = [];
+  // A skipped assertion is not a passed one. Without a count of its own a suppressed check is
+  // invisible in an "N passed, 0 failed" tally.
+  const skip = (msg) => {
+    skips.push(msg);
+    log('⊘ SKIPPED', msg);
+  };
   const fail = (msg) => {
     ok = false;
+    failures.push(msg);
     err('✗', msg);
   };
-  const pass = (msg) => log('✓', msg);
+  const pass = (msg) => {
+    passCount += 1;
+    log('✓', msg);
+  };
   const ensureCleanup = () => {
     if (chromeLaunched) {
       try { chromeCleanup(); } catch {}
@@ -2206,17 +2220,43 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     }, null, { timeout: timeoutMs, polling: 200 }).catch(() => null);
   };
   const liveAiReviewResult = await runStriffsTestHook('runLiveAiReviewCheck', { timeoutMs: 180000 }, 190000);
-  const skipManualAiReviewChecks = shouldSkipLiveAiReview(liveAiReviewResult);
-  if (skipManualAiReviewChecks) {
-    warn(`Skipping live AI review check (${JSON.stringify(liveAiReviewResult)})`);
+  const liveAiReviewStatus = String(liveAiReviewResult?.status || '').trim().toUpperCase();
+  if (shouldSkipLiveAiReview(liveAiReviewResult)) {
+    skip(`Live AI review: backend declined to review this PR (${JSON.stringify(liveAiReviewResult)})`);
   } else if (!liveAiReviewResult?.ok) {
-    fail(`Live AI review check failed (${JSON.stringify(liveAiReviewResult)})`);
+    fail(`Live AI review poll failed (${JSON.stringify(liveAiReviewResult)})`);
+  } else if (liveAiReviewStatus !== 'READY') {
+    fail(`Live AI review ended in an unexpected state (${JSON.stringify(liveAiReviewResult)})`);
   } else {
-    pass('Live AI review returns a changed SVG with at least one AI review note');
+    // Deterministic: the review ran and handed back a diagram the extension could swap in.
+    if (liveAiReviewResult.changed) {
+      pass('Live AI review reaches READY and returns an updated diagram');
+    } else {
+      fail(`Live AI review reached READY without changing the diagram (${JSON.stringify(liveAiReviewResult)})`);
+    }
+    // Judgment-dependent: assert the surfaced-item to SVG-note mapping only when the backend
+    // actually surfaced something. Asserting a note unconditionally tested the model rather than
+    // our rendering, which is why the whole block used to be skipped to stop it flaking.
+    if (liveAiReviewResult.surfacedCount > 0) {
+      if (liveAiReviewResult.hasNote) {
+        pass(`Surfaced review items are drawn as notes on the diagram (${liveAiReviewResult.surfacedCount} surfaced)`);
+      } else {
+        fail(`Backend surfaced ${liveAiReviewResult.surfacedCount} review item(s) but the diagram drew no note`);
+      }
+    } else {
+      skip('AI review note rendering: backend surfaced no review items for this PR');
+    }
 
     // These assert against the real API response rather than a fixture, so they are the only
     // check that the server is still sending what the panel is built to render.
-    if (!liveAiReviewResult.overviewRendered) {
+    //
+    // Scoped to a review that actually surfaced something. They were written when a quiet review
+    // skipped this whole block, so they never had to consider one; a counts placeholder is the
+    // server's correct answer when the model found nothing to say, and failing on it would be
+    // failing on the model's judgment rather than on the panel's rendering.
+    if (liveAiReviewResult.surfacedCount === 0) {
+      skip(`Live AI review overview: backend surfaced no review items, so there is no model account to check`);
+    } else if (!liveAiReviewResult.overviewRendered) {
       fail(`Live AI review returned no overview to render (length ${liveAiReviewResult.overviewLength})`);
     } else if (liveAiReviewResult.overviewIsCountsPlaceholder) {
       // striff-api replaced this placeholder with a model-written architecturalImpact. Seeing it
@@ -2250,18 +2290,19 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     }
   }
 
-  let aiReviewManualOk = true;
-  if (skipManualAiReviewChecks) {
-    warn('Skipping manual AI review checks because the live AI review path is not applicable for this PR/backend combination.');
-  } else {
-    aiReviewManualOk = false;
-    for (let attempt = 1; attempt <= 3 && !aiReviewManualOk; attempt += 1) {
-      await waitForAiReviewHarnessReady(10000);
-      aiReviewManualOk = await runAiReviewManualChecks();
-      if (!aiReviewManualOk && attempt < 3) {
-        warn(`Retrying manual AI review checks (attempt ${attempt + 1})`);
-        await page.waitForTimeout(1500);
-      }
+  // Always run. These mock fetchAiReviewStatus outright and drive the Architecture
+  // Review button through READY and FAILED, so not one of the seven assertions
+  // depends on what the backend decided for this PR. Gating them on the live check
+  // meant the day the backend stopped returning 403 was the day they stopped
+  // running -- and the log still reported "ok", because aiReviewManualOk started
+  // out true and nothing had set it otherwise.
+  let aiReviewManualOk = false;
+  for (let attempt = 1; attempt <= 3 && !aiReviewManualOk; attempt += 1) {
+    await waitForAiReviewHarnessReady(10000);
+    aiReviewManualOk = await runAiReviewManualChecks();
+    if (!aiReviewManualOk && attempt < 3) {
+      warn(`Retrying manual AI review checks (attempt ${attempt + 1})`);
+      await page.waitForTimeout(1500);
     }
   }
   log(`AI review manual checks completed: ${aiReviewManualOk ? 'ok' : 'failed'}`);
@@ -2741,11 +2782,13 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     }
     pass('AI Review button triggers enrichment that swaps in enriched SVG on READY');
 
-    if (result.readyOutcome?.archBtnText !== 'View AI Review') {
-      fail(`AI Review button text not "View AI Review" after READY (got "${result.readyOutcome?.archBtnText}", ${JSON.stringify(result.readyOutcome)})`);
+    // The button is re-scoped from a trigger to a view once the review is in hand (#14): after READY
+    // it reads "View review (N rules)", where N is the documented-rule count, not the old "View AI Review".
+    if (!/^View review \(\d+ rules?\)$/.test(result.readyOutcome?.archBtnText || '')) {
+      fail(`AI Review button text not "View review (N rules)" after READY (got "${result.readyOutcome?.archBtnText}", ${JSON.stringify(result.readyOutcome)})`);
       return false;
     }
-    pass('AI Review button shows "View AI Review" after enrichment completes');
+    pass(`AI Review button shows "${result.readyOutcome.archBtnText}" after enrichment completes`);
 
     if (result.readyOutcome?.archBtnDisabled !== false) {
       fail(`AI Review button not re-enabled after READY (${JSON.stringify(result.readyOutcome)})`);
@@ -3211,14 +3254,20 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   }
 
   if (tokenProvided) {
+    // POST-primary routes every public repository down the upload path whether or not a token is
+    // stored: that upload is filtered to the files the analysis reads and then queued and polled,
+    // while the token GET holds a socket open for an analysis measured at 177-483s against a 180s
+    // budget. The token still carries private repositories, the changed-file metadata resolved from
+    // the API rather than the DOM, and the fallback when an upload is refused for size -- it is just
+    // no longer what decides the primary request on a public pull request.
     const reqType = await page.evaluate(() =>
       document.documentElement?.dataset?.striffsLastRequestType || ''
     ).catch(() => '');
-    if (reqType !== 'token') {
-      fail(`Expected token-backed request, got "${reqType || 'unknown'}"`);
+    if (reqType !== 'zips') {
+      fail(`Expected the upload path on a public PR under POST-primary, got "${reqType || 'unknown'}"`);
       warn('Continuing despite request type failure');
     } else {
-      pass('Token-backed request path used');
+      pass('Public PR uses the upload path even when a token is stored');
     }
   }
 
@@ -4169,15 +4218,18 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   }
 
   if (tokenProvided) {
+    // The primary request is the upload path now, so it no longer demonstrates that a stored token
+    // reaches GitHub. Assert that where the token is still what makes the call possible: the
+    // token-backed prefetch, and the PR file metadata fetched from the API rather than scraped.
     const tokenPathSeen = bgLogs.some((l) =>
-      /fetchStriffsWithToken|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
+      /prefetchStriffsWithToken|fetchStriffsWithToken|mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     ) || pageLogs.some((l) =>
-      /Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
+      /mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     );
     if (tokenPathSeen) {
-      pass('Token-protected API path observed (fetchStriffsWithToken)');
+      pass('Stored token still reaches GitHub on a token-only path');
     } else {
-      fail('GH_TOKEN provided but no token-based API call observed (expected fetchStriffsWithToken log)');
+      fail('GH_TOKEN provided but no token-backed GitHub call observed on any path');
     }
   }
 
@@ -4697,7 +4749,10 @@ const setRemoteConfigUrlData = async (jsonObj) => {
           const btn = document.querySelector('#striffs-btn');
           const btnSuccess = !!(btn && (/check-circle/.test(btn.innerHTML) || btn.classList.contains('is-success') || /loaded from cache/i.test(btn.title || '')));
           return (hasSvg || ready || btnSuccess) ? { hasSvg, ready, btnSuccess } : null;
-        }, { timeout: 45000 }).catch(() => null);
+          // A cold analysis is queued and polled to completion rather than served inline, and was
+          // measured at 50s here against the 45s this used to allow -- the view rendered fine, 5s
+          // after the check had given up on it. Cover what the extension itself waits for.
+        }, { timeout: 240000 }).catch(() => null);
 
         if (newUiViewReady) {
           pass('[new-ui] Striffs view visible');
@@ -4913,6 +4968,12 @@ const setRemoteConfigUrlData = async (jsonObj) => {
   } else {
     pass('Striffs/Diffs buttons hidden on conversation tab');
   }
+
+  log('='.repeat(60));
+  log(`Summary: ${passCount} passed, ${failures.length} failed, ${skips.length} skipped`);
+  for (const m of skips) log(`  ⊘ ${m}`);
+  for (const m of failures) log(`  ✗ ${m}`);
+  log('='.repeat(60));
 
   // Close on success; leave open on failure or if KEEP_OPEN set
   if (ok && !process.env.KEEP_OPEN) {

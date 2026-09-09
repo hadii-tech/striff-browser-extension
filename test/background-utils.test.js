@@ -9,6 +9,7 @@ const {
   buildCacheKeyPatterns,
   buildGitHubPrefetchUrl,
   collectExpiredTempStorageKeys,
+  extractAiReviewWarmTarget,
   isGithubPullRequestUrl,
   normalizeApiBase,
   parseTempChangedFilesTimestamp,
@@ -18,6 +19,37 @@ const {
   selectChromeStorageCacheKeys,
   shouldAllowProxyUrl,
 } = require('../src/background-utils.js');
+
+test('extractAiReviewWarmTarget reads camelCase op/token/status from the top level', () => {
+  assert.deepEqual(
+    extractAiReviewWarmTarget({
+      operationId: 'op-1',
+      engagementWriteToken: 'tok-1',
+      aiReviewStatus: 'running'
+    }),
+    { operationId: 'op-1', engagementToken: 'tok-1', status: 'RUNNING' }
+  );
+});
+
+test('extractAiReviewWarmTarget reads snake_case and nested payload shapes', () => {
+  assert.deepEqual(
+    extractAiReviewWarmTarget({
+      result: { operation_id: 'op-2', engagement_token: 'tok-2', ai_review_status: 'pending' }
+    }),
+    { operationId: 'op-2', engagementToken: 'tok-2', status: 'PENDING' }
+  );
+});
+
+test('extractAiReviewWarmTarget returns nulls when op or token is missing', () => {
+  assert.deepEqual(
+    extractAiReviewWarmTarget({ aiReviewStatus: 'RUNNING' }),
+    { operationId: null, engagementToken: null, status: 'RUNNING' }
+  );
+  assert.deepEqual(
+    extractAiReviewWarmTarget(null),
+    { operationId: null, engagementToken: null, status: null }
+  );
+});
 
 test('normalizeApiBase trims whitespace and trailing slashes', () => {
   assert.equal(normalizeApiBase(' https://striff.io/// '), 'https://striff.io');

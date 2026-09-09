@@ -33,13 +33,22 @@
     message: 7000,
     ping: 1000,
     waitForToolbar: 8000,
-    bgGenerate: 180000,
+    // The upload path is queued and polled to completion in the background (ADR-035), so this must
+    // cover a full analysis (measured 177-483s) plus polling overhead, not just a single POST.
+    bgGenerate: 360000,
     bgToken: 180000,
     bgPrefetch: 30000,
     bgArtifactPrefetch: 180000,
   });
   S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES = 50;
   S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES_BYTES = 15 * 1024 * 1024;
+
+  // Route the common (public-repo) analysis through the queued, polled upload path instead of the
+  // synchronous server-fetch GET. The upload is filtered to the files the analysis reads and then
+  // queued, while the GET holds a socket open for an analysis measured at 177-483s against a
+  // bgToken budget of 180s -- so a stored token was putting a cold analysis on the slower path and
+  // the one that can time out before the server finishes. See requestPrimary.
+  S.POST_PRIMARY_ENABLED = true;
 
   S.DEFAULT_SUPPORTED_EXTS = ['java', 'ts', 'py'];
 
@@ -948,7 +957,11 @@
   // ---------- Logging ----------
   S.clog = (...a) => { try { if (S.isDebug?.()) console.log('[Striffs]', ...a); } catch { } };
   S.cinfo = (...a) => { try { if (S.isDebug?.()) console.info('[Striffs]', ...a); } catch { } };
-  S.cwarn = (...a) => { try { console.warn('[Striffs]', ...a); } catch { } };
+  // Gated, per docs/CODE_REVIEW_PLAN.md §3 option (a). cwarn is where this file reports what it has
+  // already handled -- a remote config that did not answer, a prefetch that timed out, a cache read
+  // that fell back -- and none of that is the user's console to fill. cerr below stays
+  // unconditional, for a failure nothing handled.
+  S.cwarn = (...a) => { try { if (S.isDebug?.()) console.warn('[Striffs]', ...a); } catch { } };
   S.cerr = (...a) => { try { console.error('[Striffs]', ...a); } catch { } };
   S.debugDump = (label, payload) => {
     try {
@@ -1663,7 +1676,12 @@
     const send = async () => {
       const resp = await S.sendMessageWithTimeout(msg, timeoutMs ?? S.TIMEOUTS.message);
       if (resp?.ok === true || resp?.success === true) return resp;
-      throw new Error(resp?.error || 'background request failed');
+      // Carry the reply on the error so a caller that must branch on the status
+      // (a 403 is terminal; a 502 is worth retrying) can recover it instead of
+      // matching on the message text.
+      const error = new Error(resp?.error || 'background request failed');
+      error.response = resp;
+      throw error;
     };
 
     try {
@@ -1679,12 +1697,20 @@
   };
 
   S.fetchAiReviewStatus = async ({ operationId, engagementToken, timeoutMs } = {}) => {
-    return await S.bgRequest({
-      type: "fetchAiReviewStatus",
-      operationId,
-      engagementToken,
-      timeoutMs
-    }, timeoutMs ?? 15000);
+    // Returns the reply rather than throwing on it: both pollers branch on
+    // resp.status, and a 403 has to stop the poll rather than retry a request
+    // that can never succeed. bgRequest throwing made those branches dead code
+    // and turned a rejected token into a silent five-second retry loop.
+    try {
+      return await S.bgRequest({
+        type: "fetchAiReviewStatus",
+        operationId,
+        engagementToken,
+        timeoutMs
+      }, timeoutMs ?? 15000);
+    } catch (e) {
+      return e?.response || { ok: false, error: String(e?.message || e) };
+    }
   };
 
   S.fetchSubdiagramRender = async ({ operationId, diagramIndex, components, timeoutMs } = {}) => {
@@ -2951,6 +2977,35 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+  /* Always-on documented-rule coverage headline on the diagram surface. Overlays the
+     top-left of the diagram view so it stays visible without opening the side panel and
+     is not pushed by the panel (which occupies the right). */
+  #striffs-coverage-headline{
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 3;
+    max-width: 60%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: #ffdead;
+    background: rgba(14,14,14,0.94);
+    border: 1px solid #5a5a5a;
+    border-radius: 8px;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #striffs-coverage-headline.striffs-coverage-headline--risk{
+    color: #ffd7a8;
+    border-color: #b35900;
+  }
   #striffs-scroll{
     position: relative;
     flex: 1 1 auto;
@@ -3334,6 +3389,7 @@
       </div>`;
 
     S.getStriffsContainerMarkup = (contentHtml = '<p>Loading Striffs...</p>') => `
+      <div id="striffs-coverage-headline" role="status" aria-live="polite" style="display:none;"></div>
       <div id="striffs-controls-wrap">
         <div id="striffs-controls">
           <button id="striffs-arch-review-btn" type="button" class="striffs-ctl-btn" title="Run AI architecture review on this diagram" style="display:none;">AI Review</button>
@@ -4667,10 +4723,6 @@
     S.__striffsComponentIdToSvgElement.clear();
     if (!S.__striffsSvg) return;
 
-    // Debug: Check what's actually in the SVG
-    if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] SVG qualified-name count", S.__striffsSvg.querySelectorAll('[data-qualified-name]').length);
-    }
 
     // The SVG should already have data-qualified-name attributes on entity elements
     // Build a map of qualified names to SVG elements
@@ -4683,32 +4735,30 @@
       }
     }
 
-    // Debug: Show what we found
+    const items = Array.isArray(apiData?.striffs) ? apiData.striffs : [];
+
+    // What the SVG offered and what the API sent, in one entry: they are only useful read together,
+    // and four lines per render made the console unreadable.
     if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] SVG elements with data-qualified-name:", Array.from(svgEntityMap.keys()).slice(0, 10));
-      // Also check entity elements
       const entityElements = S.__striffsSvg.querySelectorAll('g[class*="entity"], g.entity');
-      S.clog?.("[buildPathIdMapping] Entity elements found:", entityElements.length,
-        "sample attributes:", Array.from(entityElements).slice(0, 3).map((el) => ({
+      S.debugDump?.("buildPathIdMapping inputs", {
+        svgQualifiedNameCount: S.__striffsSvg.querySelectorAll('[data-qualified-name]').length,
+        svgQualifiedNames: Array.from(svgEntityMap.keys()).slice(0, 10),
+        entityElementCount: entityElements.length,
+        entitySample: Array.from(entityElements).slice(0, 3).map((el) => ({
           id: el.id,
           class: el.className,
           hasDataQName: el.hasAttribute('data-qualified-name'),
           dataQName: el.getAttribute('data-qualified-name')
-        }))
-      );
-    }
-
-    const items = Array.isArray(apiData?.striffs) ? apiData.striffs : [];
-
-    // Debug: Check API response structure
-    if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] API response structure:", {
-        hasStriffs: Array.isArray(apiData?.striffs),
-        striffsCount: items.length,
-        firstItemKeys: items[0] ? Object.keys(items[0]) : [],
-        hasComponents: items[0] ? ('components' in items[0]) : false,
-        componentsValue: items[0]?.components,
-        sampleComponent: items[0]?.components?.[0]
+        })),
+        api: {
+          hasStriffs: Array.isArray(apiData?.striffs),
+          striffsCount: items.length,
+          firstItemKeys: items[0] ? Object.keys(items[0]) : [],
+          hasComponents: items[0] ? ('components' in items[0]) : false,
+          componentsValue: items[0]?.components,
+          sampleComponent: items[0]?.components?.[0]
+        }
       });
     }
 
@@ -4784,28 +4834,31 @@
 
     // Always log the path->component mapping for debugging file tree clicks (only in debug mode)
     if (S.isDebug?.()) {
-      S.clog?.("[buildPathIdMapping] Path to component map:", Array.from(S.__striffsPathToComponentId.entries()));
-      S.clog?.("[buildPathIdMapping] Components missing from SVG:", missingInSvg);
+      S.debugDump?.("pathIdMapping", {
+        pathToComponent: Array.from(S.__striffsPathToComponentId.entries()),
+        componentsMissingFromSvg: missingInSvg
+      });
     }
 
     if (debugEnabled) {
+      // One structured dump rather than eight lines. Still callable by hand from DevTools, where the
+      // object is expandable, which is how anyone actually reads these.
       S.dumpStriffsMaps = () => {
         try {
-          S.clog?.("[map] api components (component->file)", S.__debugApiComponents);
-          S.clog?.("[map] api files", S.__debugApiFiles);
-          S.clog?.("[map] componentsDump", S.__debugComponentsDump);
-          S.clog?.("[map] path->component", S.__debugPathToComponent);
-          S.clog?.("[map] component->file", S.__debugComponentToFile);
-          S.clog?.("[map] file->diff", S.__debugFilePathToDiffHash);
-          S.clog?.("[map] diff->file", S.__debugDiffHashToFilePath);
+          S.debugDump?.("striffs maps", {
+            apiComponents: S.__debugApiComponents,
+            apiFiles: S.__debugApiFiles,
+            componentsDump: S.__debugComponentsDump,
+            pathToComponent: S.__debugPathToComponent,
+            componentToFile: S.__debugComponentToFile,
+            fileToDiff: S.__debugFilePathToDiffHash,
+            diffToFile: S.__debugDiffHashToFilePath,
+            componentIdToFile: S.__striffsComponentIdToFile
+          });
         } catch (e) {
           S.cwarn?.("dumpStriffsMaps failed", e);
         }
       };
-      // Emit the live map for quick inspection in DevTools.
-      try {
-        S.clog?.("[map] __striffsComponentIdToFile (Map)", S.__striffsComponentIdToFile);
-      } catch {}
       S.dumpStriffsMaps(); // log immediately after building the map
 
       try {
@@ -8644,6 +8697,74 @@
   }
 
   /**
+   * Coverage counts for the documented-rule headline. Pure -- no DOM, no side effects -- so it can
+   * be unit-tested directly. Mirrors buildDocumentedRulesHtml's reading of result.docFactVerdicts.
+   *
+   * A verdict is "at risk" when VIOLATED (broken by this change) or PRE_EXISTING (already broken);
+   * "upheld" when MAINTAINED (held) or RESTORED (fixed by this change). UNCLEAR ("couldn't tell")
+   * is counted on its own and never folded into either -- the same distinction the panel draws, and
+   * for the same reason: calling an abstention a pass is the one claim this surface must not make.
+   */
+  function computeDocRuleCoverage(result) {
+    const verdicts = Array.isArray(result?.docFactVerdicts) ? result.docFactVerdicts.filter(Boolean) : [];
+    let atRisk = 0, upheld = 0, unclear = 0;
+    for (const v of verdicts) {
+      const status = String(v?.status || "").trim().toUpperCase();
+      if (status === "VIOLATED" || status === "PRE_EXISTING") atRisk += 1;
+      else if (status === "MAINTAINED" || status === "RESTORED") upheld += 1;
+      else if (status === "UNCLEAR") unclear += 1;
+    }
+    return { total: verdicts.length, atRisk, upheld, unclear };
+  }
+  S.computeDocRuleCoverage = computeDocRuleCoverage;
+
+  /**
+   * The resolved headline text for a coverage count. Pure. Empty string when there are no
+   * documented rules, so the caller renders nothing rather than an empty "0 documented rules" row.
+   */
+  function formatDocRuleHeadline(coverage) {
+    const total = Number(coverage?.total || 0);
+    if (total <= 0) return "";
+    const rules = `${total} documented rule${total === 1 ? "" : "s"}`;
+    const atRisk = Number(coverage?.atRisk || 0);
+    return atRisk > 0 ? `${rules} · ${atRisk} at risk` : `${rules} · all upheld`;
+  }
+  S.formatDocRuleHeadline = formatDocRuleHeadline;
+
+  /**
+   * Progressive documented-rule coverage headline on the diagram surface (issue #14, change 2).
+   * Always-on, click-free: shows "Checking documented rules…" while the server-side review is
+   * running and resolves to the counts once the payload carries verdicts. Hidden entirely when
+   * there is no review (SKIPPED/null) or the review carries zero documented rules -- an empty
+   * headline would imply the docs were consulted and found silent, a different claim from not
+   * having a review to report.
+   */
+  S.updateDocRuleHeadline = function updateDocRuleHeadline(result, { status = null } = {}) {
+    const el = document.getElementById("striffs-coverage-headline");
+    if (!el) return;
+    if (S.__disabledByRemote) { el.style.display = "none"; return; }
+    const s = String(status == null ? (S.__aiReviewStatus || "") : status).trim().toUpperCase();
+    const coverage = computeDocRuleCoverage(result);
+    // Resolved counts win: once verdicts are present, show them regardless of polling status.
+    if (coverage.total > 0) {
+      el.textContent = formatDocRuleHeadline(coverage);
+      el.classList.toggle("striffs-coverage-headline--risk", coverage.atRisk > 0);
+      el.style.display = "";
+      return;
+    }
+    // No verdicts yet: show progress only while the server actually has a review running.
+    if (s === "PENDING" || s === "RUNNING") {
+      el.textContent = "Checking documented rules…";
+      el.classList.remove("striffs-coverage-headline--risk");
+      el.style.display = "";
+      return;
+    }
+    // READY-with-no-rules, SKIPPED, or no review: show no rule headline.
+    el.classList.remove("striffs-coverage-headline--risk");
+    el.style.display = "none";
+  };
+
+  /**
    * The deterministic check roster and how each fared. Showing which checks ran is what makes the
    * empty result legible: "nothing surfaced" is a much weaker statement on its own than beside the
    * twelve checks that produced it.
@@ -8903,16 +9024,23 @@
 
     if (view === "striffs" && diagramReady) {
       btn.style.display = "";
-      // Only show "Analyzing..." when polling is actually active (user-triggered)
-      if (enriching && S.__aiReviewPollTimer) {
-        btn.textContent = "Analyzing...";
+      // With auto-poll (issue #14), the button reflects state and opens the panel rather than
+      // starting the work. "Analyzing…" whenever a poll is active -- whether the render auto-
+      // started it or the user clicked -- then a "view" affordance carrying the rule count.
+      const polling = Boolean(S.__aiReviewPollTimer || S.__aiReviewPollInFlight);
+      if (enriching && polling) {
+        btn.textContent = "Analyzing…";
         btn.disabled = true;
+        btn.title = "Architecture review is running";
       } else if (reviewReady) {
-        btn.textContent = "View AI Review";
+        const n = Number(computeDocRuleCoverage(S.__lastEnrichmentResult).total || 0);
+        btn.textContent = n > 0 ? `View review (${n} rule${n === 1 ? "" : "s"})` : "View AI Review";
         btn.disabled = commentActive;
+        btn.title = "View the architecture review";
       } else {
         btn.textContent = "AI Review";
         btn.disabled = commentActive;
+        btn.title = "Run AI architecture review on this diagram";
       }
     } else {
       btn.style.display = "none";
@@ -8961,6 +9089,8 @@
     S.toast?.("Executing architecture review...", "info", { timeoutMs: 4000 });
     S.__aiReviewStatus = "PENDING";
     S.__aiReviewPollStartedAt = Date.now();
+    // Manual trigger: the user asked for the review, so its READY branch opens the panel.
+    S.__aiReviewPollAuto = false;
     S.updateStriffButton?.({ enriching: true, tooltip: "Analyzing" });
     S.startEnrichmentPolling?.({ immediate: true, reason: "manual-button" });
     S.updateArchReviewButton?.();
@@ -8999,8 +9129,26 @@
         if (wrap) wrap.remove();
       }, 500);
     }
+    S.updateDocRuleHeadline?.(result, { status: S.__aiReviewStatus });
     S.updateArchReviewButton?.();
     return true;
+  };
+
+  // Auto-collect the server-side review the diagram payload reports as running (issue #14,
+  // change 1). This starts NO new server compute -- it polls an already-running job. Respects the
+  // remote kill switch and the SKIPPED guard, and never double-starts a poll already in flight.
+  S.maybeAutoStartReviewPolling = ({ status = null } = {}) => {
+    if (S.__disabledByRemote) return false;
+    const s = String(status == null ? (S.__aiReviewStatus || "") : status).trim().toUpperCase();
+    // Only PENDING/RUNNING are pollable. SKIPPED/NOT_REQUESTED map to null upstream
+    // (getAiReviewStatusFromResult) and never reach here; READY needs no poll.
+    if (!(s === "PENDING" || s === "RUNNING")) return false;
+    if (S.__aiReviewPollTimer || S.__aiReviewPollInFlight) return false;
+    S.__aiReviewStatus = s;
+    if (!S.__aiReviewPollStartedAt) S.__aiReviewPollStartedAt = Date.now();
+    // Auto-started: its READY branch must NOT auto-open the side panel (the panel stays opt-in).
+    S.__aiReviewPollAuto = true;
+    return S.startEnrichmentPolling?.({ immediate: true, reason: "auto-render" }) !== false;
   };
 
   S.startEnrichmentPolling = ({ immediate = false, reason = "" } = {}) => {
@@ -9093,13 +9241,18 @@
           }
           S.__lastEnrichmentResult = result;
           S.updateStriffButton?.({ success: true, tooltip: "View" });
+          S.updateDocRuleHeadline?.(result, { status: "READY" });
           S.updateArchReviewButton?.();
-          S.openArchReviewPanel?.(result);
+          // Panel stays opt-in: only the manual trigger opens it on completion. An auto-started
+          // poll leaves the always-on headline (change 2) as the surface and the button as the
+          // opt-in door -- it does not push the diagram 400px on its own (issue #14, change 4).
+          if (!S.__aiReviewPollAuto) S.openArchReviewPanel?.(result);
           return;
         }
         if (nextStatus === "FAILED") {
           S.cancelEnrichmentPolling?.("failed");
           S.updateStriffButton?.({ success: true, tooltip: result?.aiReviewErrorMessage || "AI review failed. Base diagram is still available." });
+          S.updateDocRuleHeadline?.(result, { status: "FAILED" });
           S.updateArchReviewButton?.();
           S.toast?.(result?.aiReviewErrorMessage || "Architecture review failed.", "warning", { timeoutMs: 5000 });
           return;
@@ -9120,6 +9273,7 @@
           S.cancelEnrichmentPolling?.("skipped");
           const why = result?.aiReviewErrorMessage || "Architecture review was not applicable to this PR.";
           S.updateStriffButton?.({ success: true, tooltip: why });
+          S.updateDocRuleHeadline?.(result, { status: rawStatus });
           S.updateArchReviewButton?.();
           S.toast?.(why, "neutral", { timeoutMs: 5000 });
           return;
@@ -9895,11 +10049,57 @@
     ...ZIP_LIMIT_ERROR_CODES
   ]);
 
+  // Both sets, not just the first. The server answers an oversized upload with 413
+  // ZIP_UPLOAD_TOO_LARGE and "Uploaded file exceeds the maximum allowed size." -- a code that lives
+  // in ZIP_REDUCE_SCOPE_ERROR_CODES and a message saying "file" where the pattern below wants "zip
+  // entry" -- so both arms missed it and the one refusal a token actually fixes was the one that
+  // offered no token. Observed on iluwatar/java-design-patterns#3601.
+  // A failure from the upload path meaning "this PR is too big for the ZIP route" -- the case where
+  // the server-side token GET, which fetches without a client-side download and has no changed-file
+  // cap, is the right fallback.
+  function isUploadPathTooLargeError(err) {
+    const code = String(err?.errorCode || '').trim().toUpperCase();
+    if (ZIP_LIMIT_ERROR_CODES.has(code) || ZIP_REDUCE_SCOPE_ERROR_CODES.has(code)) return true;
+    if (Number(err?.status || 0) === 413) return true;
+    return /zip entry exceeds maximum allowed size|uploaded file exceeds the maximum allowed size|too many changes|request too large|repo(sitory)? (is )?too large|too large for the zip generation path/i
+      .test(String(err?.message || ''));
+  }
+
+  // The single analysis entry point.
+  //
+  // The upload (POST) path is queued and polled to completion in the background, so it is preferred:
+  // it downloads the base ZIP from codeload unauthenticated and filters it to what the analysis
+  // reads, which means it needs no credential and holds no socket. It only works on public
+  // repositories for exactly that reason -- a private repo can only be fetched server-side with the
+  // user's token, which is also the fallback when an upload is refused for size.
+  //
+  // So: private repo -> token GET; public repo -> upload, with token GET as the size fallback.
+  async function requestPrimary(meta, token, { quiet = false } = {}) {
+    const postPrimary = S.POST_PRIMARY_ENABLED === true && !S.isPrivateRepo?.();
+    if (!postPrimary) {
+      return token
+        ? await requestWithToken(token, meta, { quiet })
+        : await requestWithZips(meta, { quiet });
+    }
+    try {
+      return await requestWithZips(meta, { quiet });
+    } catch (err) {
+      if (token && isUploadPathTooLargeError(err)) {
+        S.cinfo?.('Upload path refused for size; falling back to token GET', {
+          errorCode: err?.errorCode || null,
+          status: err?.status || null
+        });
+        return await requestWithToken(token, meta, { quiet });
+      }
+      throw err;
+    }
+  }
+
+  // One notion of "too big for the upload path", shared with the fallback in requestPrimary above
+  // rather than restated here, so the two cannot drift apart again.
   const shouldPromptForTokenForZipLimit = ({ token, status, errorCode, message }) => {
     if (token) return false;
-    if (errorCode && ZIP_LIMIT_ERROR_CODES.has(String(errorCode).trim().toUpperCase())) return true;
-    if (!(status === 400 || status === 413)) return false;
-    return /zip entry exceeds maximum allowed size|too many changes|request too large|repo too large|repository is too large/i.test(String(message || ''));
+    return isUploadPathTooLargeError({ status, errorCode, message });
   };
 
   const extractHumanMessage = (raw) => {
@@ -10048,11 +10248,7 @@
           });
           return false;
         }
-        const fetchFreshResult = async () => (
-          token
-            ? await requestWithToken(token, meta, { quiet: true })
-            : await requestWithZips(meta, { quiet: true })
-        );
+        const fetchFreshResult = async () => await requestPrimary(meta, token, { quiet: true });
         let result = null;
         let lastError = null;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -10129,8 +10325,11 @@
 	      // The initial response can omit the write token even when an operationId
 	      // is present (backend attaches it slightly after operation creation).
 	      // Retry once in the background so telemetry arms without requiring the
-	      // user to trigger AI Review or comment mode first.
-	      S.refreshEngagementContextFromFreshResult?.(meta)?.catch?.(() => {});
+	      // user to trigger AI Review or comment mode first. Once the token lands,
+	      // start the auto-review poll it was blocking (issue #14, change 1).
+	      Promise.resolve(S.refreshEngagementContextFromFreshResult?.(meta))
+	        .then(() => S.maybeAutoStartReviewPolling?.())
+	        .catch?.(() => {});
 	    }
       const aiReviewStatus = S.syncAiReviewStateFromResult?.(result);
 	    S.debugDump?.("render result payload summary", {
@@ -10178,16 +10377,22 @@
 	    S.__lastFetchedUpdatedAt = updated_at;
 	    S.setAutoGenerateIntent?.(true);
       S.updateArchReviewButton?.();
-      // No auto-enrichment — user triggers via AI Review button.
-      // If the API returned PENDING/RUNNING (server-side auto-start), do NOT
-      // begin polling.  Reset the status so it doesn't pollute the button state.
-      // Store the result if it came back READY (server completed enrichment already).
+      // The server auto-starts the documented-rule review and reports its status on the diagram
+      // payload (issue #14). Collect that already-running job instead of waiting for a click:
+      //   READY   -> the payload we just rendered IS the enriched diagram, so keep it (change 3);
+      //   PENDING/RUNNING -> begin background polling now (change 1);
+      //   SKIPPED/NOT_REQUESTED -> aiReviewStatus is null here (getAiReviewStatusFromResult maps
+      //                            them out), so nothing polls and no headline shows (the guard).
       if (aiReviewStatus === "READY") {
         S.__lastEnrichmentResult = result;
-      } else if (aiReviewStatus === "PENDING" || aiReviewStatus === "RUNNING") {
-        S.__aiReviewStatus = null;
-        S.updateArchReviewButton?.();
+      } else if ((aiReviewStatus === "PENDING" || aiReviewStatus === "RUNNING") && engagementReady) {
+        // When engagement context is missing, the background refresh scheduled above starts the
+        // poll once the write token lands; don't start here without the context it needs.
+        S.maybeAutoStartReviewPolling?.({ status: aiReviewStatus });
       }
+      // Progressive coverage headline on the diagram surface -- click-free (change 2).
+      S.updateDocRuleHeadline?.(result, { status: aiReviewStatus });
+      S.updateArchReviewButton?.();
       if (aiReviewStatus === "FAILED") {
         S.updateStriffButton({ success: true, tooltip: result?.aiReviewErrorMessage || "AI enrichment failed. Base Striffs are still available." });
         return;
@@ -10254,7 +10459,7 @@
         }
 
         if (!result) {
-          result = token ? await requestWithToken(token, meta) : await requestWithZips(meta);
+          result = await requestPrimary(meta, token);
         }
 
         await renderStriffsResult(result, meta, { fromCache });
@@ -10914,18 +11119,10 @@
               const liveSvgNode = S.getPrimaryDiagramSvg?.() || null;
               const finalSvg = liveSvgNode ? serializer.serializeToString(liveSvgNode) : '';
               const hasNote = finalSvg.includes(S.REVIEW_NOTE_PREFIX);
-              if (!hasNote) {
-                return {
-                  ok: false,
-                  reason: 'ready-no-notes',
-                  status,
-                  reviewId,
-                  changed: Boolean(finalSvg && finalSvg !== baseSvg),
-                  hasNote,
-                  baseLength: baseSvg.length,
-                  finalLength: finalSvg.length
-                };
-              }
+              // No early return when nothing was surfaced. Whether this pull request is worth
+              // flagging is the model's call, but reaching READY, rendering an overview and drawing
+              // the structural-checks roster are not -- and bailing here skipped every one of those
+              // assertions on exactly the fixtures where the model happened to stay quiet.
               // Render the panel from the live payload so the report below describes what a
               // reviewer would actually see, not just what the response contained.
               S.__lastEnrichmentResult = result;
@@ -10934,7 +11131,10 @@
               const panelText = String(panel?.innerText || '');
               const overview = String(result?.reviewSummary?.overview || '').trim();
               return {
-                ok: Boolean(hasNote && finalSvg && finalSvg !== baseSvg),
+                // The poll reached a terminal state and handed back a payload. Whether a note was
+                // drawn is reported separately, beside the surfaced count that decides whether one
+                // was owed.
+                ok: true,
                 status,
                 reviewId,
                 changed: Boolean(finalSvg && finalSvg !== baseSvg),
