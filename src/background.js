@@ -235,6 +235,38 @@ async function downloadRepoZipAsArrayBuffer(owner, repo, ref, apiBase) {
 
 const readApiErrorResponse = BgUtils.readApiErrorResponse;
 
+// Warm the /ai-review status endpoint off the back of a prefetch (issue #14, change 5). The server
+// auto-starts the review when it builds the diagram, so if the prefetch reply carries the operation
+// and its engagement token we fire one best-effort GET to nudge the review further along before the
+// user opens the PR. Fire-and-forget: never awaited, never surfaced -- a failure here changes
+// nothing, since the interactive path polls the same endpoint anyway. Adds no new prefetch trigger;
+// it only piggybacks on prefetch replies that already happened.
+function warmAiReviewFromPrefetch(json, apiBase) {
+  try {
+    const extract = BgUtils.extractAiReviewWarmTarget;
+    if (typeof extract !== 'function' || !json || typeof json !== 'object') return;
+    const { operationId, engagementToken, status } = extract(json) || {};
+    if (!operationId || !engagementToken) return;
+    // Only warm a review the server actually has running or ready; nothing to warm otherwise.
+    if (!(status === 'PENDING' || status === 'RUNNING' || status === 'READY')) return;
+    const base = normalizeApiBase(apiBase);
+    if (!base) return;
+    const url = `${base}/api/v1/striffs/${encodeURIComponent(operationId)}/ai-review`;
+    const t = abortableTimeout(15000);
+    fetch(url, {
+      method: 'GET',
+      headers: { 'X-Striff-Engagement-Token': engagementToken },
+      signal: t.signal,
+      cache: 'no-cache'
+    })
+      .then((res) => { debugLog('warmAiReviewFromPrefetch', { status: res.status }); })
+      .catch((e) => { debugLog('warmAiReviewFromPrefetch error', { error: String(e?.message || e) }); })
+      .finally(() => t.cancel());
+  } catch (e) {
+    debugLog('warmAiReviewFromPrefetch skipped', { error: String(e?.message || e) });
+  }
+}
+
 async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { timeoutMs = 120000, apiBase = '' } = {}) {
   const sanitizedChangedFiles = sanitizeChangedFilesPayload(changedFiles);
 
@@ -693,6 +725,7 @@ const handlers = {
         json,
         timings: { type: 'prefetch', durationMs: Date.now() - started, status: res.status }
       });
+      warmAiReviewFromPrefetch(json, apiBase);
     } catch (e) {
       debugLog('prefetchStriffsWithToken error', {
         durationMs: Date.now() - started,
@@ -775,6 +808,7 @@ const handlers = {
         zipFromCache: !!before.fromCache
       }
     });
+    warmAiReviewFromPrefetch(posted.json, apiBase);
   },
   fetchSupportedLanguages: async (msg, { safeReply }) => {
     try {

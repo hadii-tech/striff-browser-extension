@@ -160,6 +160,46 @@ const StriffsBackgroundUtilsFactory = (() => {
     return result;
   }
 
+  // Pull the operation id, engagement write token and review status out of a prefetch reply so
+  // the prefetch flow can warm the /ai-review status endpoint too (issue #14, change 5). Pure --
+  // no network. Returns nulls when the reply does not carry what a warm needs, in which case the
+  // caller does nothing: warming is best-effort and its absence is never an error. Field names
+  // mirror the content script's extractEngagementContextFromPayload / getAiReviewStatusFromResult.
+  function extractAiReviewWarmTarget(payload) {
+    const seen = [];
+    const candidates = [
+      payload,
+      payload?.result,
+      payload?.data,
+      payload?.payload,
+      payload?.response,
+      payload?.body,
+      payload?.meta,
+      payload?.metadata,
+      payload?.engagement,
+      payload?.engagementContext,
+      payload?.context,
+      payload?.review,
+      payload?.aiReview,
+      Array.isArray(payload?.striffs) ? payload.striffs[0] : null
+    ].filter((v) => v && typeof v === 'object' && !seen.includes(v) && seen.push(v));
+    const readFirst = (keys) => {
+      for (const candidate of candidates) {
+        for (const key of keys) {
+          const value = String(candidate?.[key] || '').trim();
+          if (value) return value;
+        }
+      }
+      return '';
+    };
+    return {
+      operationId: readFirst(['operationId', 'operationID', 'operation_id']) || null,
+      engagementToken:
+        readFirst(['engagementWriteToken', 'engagementToken', 'engagement_write_token', 'engagement_token']) || null,
+      status: readFirst(['aiReviewStatus', 'ai_review_status', 'reviewStatus']).toUpperCase() || null
+    };
+  }
+
   async function readApiErrorResponse(res) {
     const contentType = String(res?.headers?.get?.('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
@@ -195,6 +235,7 @@ const StriffsBackgroundUtilsFactory = (() => {
     buildArtifactPrefetchUrl,
     buildCacheKeyPatterns,
     collectExpiredTempStorageKeys,
+    extractAiReviewWarmTarget,
     isGithubPullRequestUrl,
     isLoopbackHostname,
     normalizeApiBase,

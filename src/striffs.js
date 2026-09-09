@@ -2977,6 +2977,35 @@
     opacity: 0.5;
     cursor: not-allowed;
   }
+  /* Always-on documented-rule coverage headline on the diagram surface. Overlays the
+     top-left of the diagram view so it stays visible without opening the side panel and
+     is not pushed by the panel (which occupies the right). */
+  #striffs-coverage-headline{
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 3;
+    max-width: 60%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: #ffdead;
+    background: rgba(14,14,14,0.94);
+    border: 1px solid #5a5a5a;
+    border-radius: 8px;
+    pointer-events: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #striffs-coverage-headline.striffs-coverage-headline--risk{
+    color: #ffd7a8;
+    border-color: #b35900;
+  }
   #striffs-scroll{
     position: relative;
     flex: 1 1 auto;
@@ -3360,6 +3389,7 @@
       </div>`;
 
     S.getStriffsContainerMarkup = (contentHtml = '<p>Loading Striffs...</p>') => `
+      <div id="striffs-coverage-headline" role="status" aria-live="polite" style="display:none;"></div>
       <div id="striffs-controls-wrap">
         <div id="striffs-controls">
           <button id="striffs-arch-review-btn" type="button" class="striffs-ctl-btn" title="Run AI architecture review on this diagram" style="display:none;">AI Review</button>
@@ -8667,6 +8697,74 @@
   }
 
   /**
+   * Coverage counts for the documented-rule headline. Pure -- no DOM, no side effects -- so it can
+   * be unit-tested directly. Mirrors buildDocumentedRulesHtml's reading of result.docFactVerdicts.
+   *
+   * A verdict is "at risk" when VIOLATED (broken by this change) or PRE_EXISTING (already broken);
+   * "upheld" when MAINTAINED (held) or RESTORED (fixed by this change). UNCLEAR ("couldn't tell")
+   * is counted on its own and never folded into either -- the same distinction the panel draws, and
+   * for the same reason: calling an abstention a pass is the one claim this surface must not make.
+   */
+  function computeDocRuleCoverage(result) {
+    const verdicts = Array.isArray(result?.docFactVerdicts) ? result.docFactVerdicts.filter(Boolean) : [];
+    let atRisk = 0, upheld = 0, unclear = 0;
+    for (const v of verdicts) {
+      const status = String(v?.status || "").trim().toUpperCase();
+      if (status === "VIOLATED" || status === "PRE_EXISTING") atRisk += 1;
+      else if (status === "MAINTAINED" || status === "RESTORED") upheld += 1;
+      else if (status === "UNCLEAR") unclear += 1;
+    }
+    return { total: verdicts.length, atRisk, upheld, unclear };
+  }
+  S.computeDocRuleCoverage = computeDocRuleCoverage;
+
+  /**
+   * The resolved headline text for a coverage count. Pure. Empty string when there are no
+   * documented rules, so the caller renders nothing rather than an empty "0 documented rules" row.
+   */
+  function formatDocRuleHeadline(coverage) {
+    const total = Number(coverage?.total || 0);
+    if (total <= 0) return "";
+    const rules = `${total} documented rule${total === 1 ? "" : "s"}`;
+    const atRisk = Number(coverage?.atRisk || 0);
+    return atRisk > 0 ? `${rules} · ${atRisk} at risk` : `${rules} · all upheld`;
+  }
+  S.formatDocRuleHeadline = formatDocRuleHeadline;
+
+  /**
+   * Progressive documented-rule coverage headline on the diagram surface (issue #14, change 2).
+   * Always-on, click-free: shows "Checking documented rules…" while the server-side review is
+   * running and resolves to the counts once the payload carries verdicts. Hidden entirely when
+   * there is no review (SKIPPED/null) or the review carries zero documented rules -- an empty
+   * headline would imply the docs were consulted and found silent, a different claim from not
+   * having a review to report.
+   */
+  S.updateDocRuleHeadline = function updateDocRuleHeadline(result, { status = null } = {}) {
+    const el = document.getElementById("striffs-coverage-headline");
+    if (!el) return;
+    if (S.__disabledByRemote) { el.style.display = "none"; return; }
+    const s = String(status == null ? (S.__aiReviewStatus || "") : status).trim().toUpperCase();
+    const coverage = computeDocRuleCoverage(result);
+    // Resolved counts win: once verdicts are present, show them regardless of polling status.
+    if (coverage.total > 0) {
+      el.textContent = formatDocRuleHeadline(coverage);
+      el.classList.toggle("striffs-coverage-headline--risk", coverage.atRisk > 0);
+      el.style.display = "";
+      return;
+    }
+    // No verdicts yet: show progress only while the server actually has a review running.
+    if (s === "PENDING" || s === "RUNNING") {
+      el.textContent = "Checking documented rules…";
+      el.classList.remove("striffs-coverage-headline--risk");
+      el.style.display = "";
+      return;
+    }
+    // READY-with-no-rules, SKIPPED, or no review: show no rule headline.
+    el.classList.remove("striffs-coverage-headline--risk");
+    el.style.display = "none";
+  };
+
+  /**
    * The deterministic check roster and how each fared. Showing which checks ran is what makes the
    * empty result legible: "nothing surfaced" is a much weaker statement on its own than beside the
    * twelve checks that produced it.
@@ -8926,16 +9024,23 @@
 
     if (view === "striffs" && diagramReady) {
       btn.style.display = "";
-      // Only show "Analyzing..." when polling is actually active (user-triggered)
-      if (enriching && S.__aiReviewPollTimer) {
-        btn.textContent = "Analyzing...";
+      // With auto-poll (issue #14), the button reflects state and opens the panel rather than
+      // starting the work. "Analyzing…" whenever a poll is active -- whether the render auto-
+      // started it or the user clicked -- then a "view" affordance carrying the rule count.
+      const polling = Boolean(S.__aiReviewPollTimer || S.__aiReviewPollInFlight);
+      if (enriching && polling) {
+        btn.textContent = "Analyzing…";
         btn.disabled = true;
+        btn.title = "Architecture review is running";
       } else if (reviewReady) {
-        btn.textContent = "View AI Review";
+        const n = Number(computeDocRuleCoverage(S.__lastEnrichmentResult).total || 0);
+        btn.textContent = n > 0 ? `View review (${n} rule${n === 1 ? "" : "s"})` : "View AI Review";
         btn.disabled = commentActive;
+        btn.title = "View the architecture review";
       } else {
         btn.textContent = "AI Review";
         btn.disabled = commentActive;
+        btn.title = "Run AI architecture review on this diagram";
       }
     } else {
       btn.style.display = "none";
@@ -8984,6 +9089,8 @@
     S.toast?.("Executing architecture review...", "info", { timeoutMs: 4000 });
     S.__aiReviewStatus = "PENDING";
     S.__aiReviewPollStartedAt = Date.now();
+    // Manual trigger: the user asked for the review, so its READY branch opens the panel.
+    S.__aiReviewPollAuto = false;
     S.updateStriffButton?.({ enriching: true, tooltip: "Analyzing" });
     S.startEnrichmentPolling?.({ immediate: true, reason: "manual-button" });
     S.updateArchReviewButton?.();
@@ -9022,8 +9129,26 @@
         if (wrap) wrap.remove();
       }, 500);
     }
+    S.updateDocRuleHeadline?.(result, { status: S.__aiReviewStatus });
     S.updateArchReviewButton?.();
     return true;
+  };
+
+  // Auto-collect the server-side review the diagram payload reports as running (issue #14,
+  // change 1). This starts NO new server compute -- it polls an already-running job. Respects the
+  // remote kill switch and the SKIPPED guard, and never double-starts a poll already in flight.
+  S.maybeAutoStartReviewPolling = ({ status = null } = {}) => {
+    if (S.__disabledByRemote) return false;
+    const s = String(status == null ? (S.__aiReviewStatus || "") : status).trim().toUpperCase();
+    // Only PENDING/RUNNING are pollable. SKIPPED/NOT_REQUESTED map to null upstream
+    // (getAiReviewStatusFromResult) and never reach here; READY needs no poll.
+    if (!(s === "PENDING" || s === "RUNNING")) return false;
+    if (S.__aiReviewPollTimer || S.__aiReviewPollInFlight) return false;
+    S.__aiReviewStatus = s;
+    if (!S.__aiReviewPollStartedAt) S.__aiReviewPollStartedAt = Date.now();
+    // Auto-started: its READY branch must NOT auto-open the side panel (the panel stays opt-in).
+    S.__aiReviewPollAuto = true;
+    return S.startEnrichmentPolling?.({ immediate: true, reason: "auto-render" }) !== false;
   };
 
   S.startEnrichmentPolling = ({ immediate = false, reason = "" } = {}) => {
@@ -9116,13 +9241,18 @@
           }
           S.__lastEnrichmentResult = result;
           S.updateStriffButton?.({ success: true, tooltip: "View" });
+          S.updateDocRuleHeadline?.(result, { status: "READY" });
           S.updateArchReviewButton?.();
-          S.openArchReviewPanel?.(result);
+          // Panel stays opt-in: only the manual trigger opens it on completion. An auto-started
+          // poll leaves the always-on headline (change 2) as the surface and the button as the
+          // opt-in door -- it does not push the diagram 400px on its own (issue #14, change 4).
+          if (!S.__aiReviewPollAuto) S.openArchReviewPanel?.(result);
           return;
         }
         if (nextStatus === "FAILED") {
           S.cancelEnrichmentPolling?.("failed");
           S.updateStriffButton?.({ success: true, tooltip: result?.aiReviewErrorMessage || "AI review failed. Base diagram is still available." });
+          S.updateDocRuleHeadline?.(result, { status: "FAILED" });
           S.updateArchReviewButton?.();
           S.toast?.(result?.aiReviewErrorMessage || "Architecture review failed.", "warning", { timeoutMs: 5000 });
           return;
@@ -9143,6 +9273,7 @@
           S.cancelEnrichmentPolling?.("skipped");
           const why = result?.aiReviewErrorMessage || "Architecture review was not applicable to this PR.";
           S.updateStriffButton?.({ success: true, tooltip: why });
+          S.updateDocRuleHeadline?.(result, { status: rawStatus });
           S.updateArchReviewButton?.();
           S.toast?.(why, "neutral", { timeoutMs: 5000 });
           return;
@@ -10194,8 +10325,11 @@
 	      // The initial response can omit the write token even when an operationId
 	      // is present (backend attaches it slightly after operation creation).
 	      // Retry once in the background so telemetry arms without requiring the
-	      // user to trigger AI Review or comment mode first.
-	      S.refreshEngagementContextFromFreshResult?.(meta)?.catch?.(() => {});
+	      // user to trigger AI Review or comment mode first. Once the token lands,
+	      // start the auto-review poll it was blocking (issue #14, change 1).
+	      Promise.resolve(S.refreshEngagementContextFromFreshResult?.(meta))
+	        .then(() => S.maybeAutoStartReviewPolling?.())
+	        .catch?.(() => {});
 	    }
       const aiReviewStatus = S.syncAiReviewStateFromResult?.(result);
 	    S.debugDump?.("render result payload summary", {
@@ -10243,16 +10377,22 @@
 	    S.__lastFetchedUpdatedAt = updated_at;
 	    S.setAutoGenerateIntent?.(true);
       S.updateArchReviewButton?.();
-      // No auto-enrichment — user triggers via AI Review button.
-      // If the API returned PENDING/RUNNING (server-side auto-start), do NOT
-      // begin polling.  Reset the status so it doesn't pollute the button state.
-      // Store the result if it came back READY (server completed enrichment already).
+      // The server auto-starts the documented-rule review and reports its status on the diagram
+      // payload (issue #14). Collect that already-running job instead of waiting for a click:
+      //   READY   -> the payload we just rendered IS the enriched diagram, so keep it (change 3);
+      //   PENDING/RUNNING -> begin background polling now (change 1);
+      //   SKIPPED/NOT_REQUESTED -> aiReviewStatus is null here (getAiReviewStatusFromResult maps
+      //                            them out), so nothing polls and no headline shows (the guard).
       if (aiReviewStatus === "READY") {
         S.__lastEnrichmentResult = result;
-      } else if (aiReviewStatus === "PENDING" || aiReviewStatus === "RUNNING") {
-        S.__aiReviewStatus = null;
-        S.updateArchReviewButton?.();
+      } else if ((aiReviewStatus === "PENDING" || aiReviewStatus === "RUNNING") && engagementReady) {
+        // When engagement context is missing, the background refresh scheduled above starts the
+        // poll once the write token lands; don't start here without the context it needs.
+        S.maybeAutoStartReviewPolling?.({ status: aiReviewStatus });
       }
+      // Progressive coverage headline on the diagram surface -- click-free (change 2).
+      S.updateDocRuleHeadline?.(result, { status: aiReviewStatus });
+      S.updateArchReviewButton?.();
       if (aiReviewStatus === "FAILED") {
         S.updateStriffButton({ success: true, tooltip: result?.aiReviewErrorMessage || "AI enrichment failed. Base Striffs are still available." });
         return;
