@@ -2,6 +2,15 @@
 
 ## 1.1.0
 
+- The extension no longer prefetches. Every pull request page load, and every in-app navigation to
+  another pull request, fired a background analysis request before anyone asked for a diagram -- a
+  server-side fetch when a token was stored, otherwise a base-branch archive upload -- and its
+  de-duplication key was built on an update time the page often could not supply, so the current
+  time stood in and a single view could fire it more than once. With a token stored, a public pull
+  request was prefetched on the token route while the real request went through the upload route,
+  whose results are keyed separately, so that work was never read. Requests now go out only when
+  the extension needs a diagram to show. striff-api drops the matching prefetch endpoints; 1.0.x
+  clients that still call them catch the error and log a console warning.
 - "Create one here" opens a fine-grained token already filled in: named Striffs, read-only
   Contents and Pull requests, 364 days. The link used to open a blank form and leave the
   permissions to the user; the only choice left is "All repositories". Not a classic token, whose
@@ -21,8 +30,7 @@
 - An architecture review that ends without being authorised now says so and stops, instead of
   retrying the same rejected request every five seconds until it times out.
 - `[Striffs]` warnings for conditions the extension already handled - a remote config that did not
-  answer, a prefetch that timed out, a cache read that fell back - no longer appear in the console
-  unless debug logging is on.
+  answer, a cache read that fell back - no longer appear in the console unless debug logging is on.
 
 - Documented rules render from the status the server actually sends. The panel had been splitting
   rows on a `tier` the API stopped sending and checking for a `RAISED` status it stopped producing,

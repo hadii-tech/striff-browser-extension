@@ -5,11 +5,8 @@ const {
   CACHE_CLEAR_SEEN_KEY,
   INDEXEDDB_NAME,
   TEMP_CHANGED_FILES_PREFIX,
-  buildArtifactPrefetchUrl,
   buildCacheKeyPatterns,
-  buildGitHubPrefetchUrl,
   collectExpiredTempStorageKeys,
-  extractAiReviewWarmTarget,
   isGithubPullRequestUrl,
   normalizeApiBase,
   parseTempChangedFilesTimestamp,
@@ -20,59 +17,9 @@ const {
   shouldAllowProxyUrl,
 } = require('../src/background-utils.js');
 
-test('extractAiReviewWarmTarget reads camelCase op/token/status from the top level', () => {
-  assert.deepEqual(
-    extractAiReviewWarmTarget({
-      operationId: 'op-1',
-      engagementWriteToken: 'tok-1',
-      aiReviewStatus: 'running'
-    }),
-    { operationId: 'op-1', engagementToken: 'tok-1', status: 'RUNNING' }
-  );
-});
-
-test('extractAiReviewWarmTarget reads snake_case and nested payload shapes', () => {
-  assert.deepEqual(
-    extractAiReviewWarmTarget({
-      result: { operation_id: 'op-2', engagement_token: 'tok-2', ai_review_status: 'pending' }
-    }),
-    { operationId: 'op-2', engagementToken: 'tok-2', status: 'PENDING' }
-  );
-});
-
-test('extractAiReviewWarmTarget returns nulls when op or token is missing', () => {
-  assert.deepEqual(
-    extractAiReviewWarmTarget({ aiReviewStatus: 'RUNNING' }),
-    { operationId: null, engagementToken: null, status: 'RUNNING' }
-  );
-  assert.deepEqual(
-    extractAiReviewWarmTarget(null),
-    { operationId: null, engagementToken: null, status: null }
-  );
-});
-
 test('normalizeApiBase trims whitespace and trailing slashes', () => {
   assert.equal(normalizeApiBase(' https://striff.io/// '), 'https://striff.io');
   assert.equal(normalizeApiBase(''), '');
-});
-
-test('buildGitHubPrefetchUrl targets the prefetch endpoint and encodes query values', () => {
-  assert.equal(
-    buildGitHubPrefetchUrl(' https://striff.io/// ', 'openai', 'demo repo', 123, '2026-05-02T10:11:12Z'),
-    'https://striff.io/api/v1/github/striffs/prefetch/owners/openai/repos/demo%20repo/pulls/123?updated_at=2026-05-02T10%3A11%3A12Z'
-  );
-});
-
-test('buildArtifactPrefetchUrl targets the artifact prefetch endpoint and includes optional query values', () => {
-  assert.equal(
-    buildArtifactPrefetchUrl('https://striff.io/', {
-      owner: 'openai',
-      repo: 'demo repo',
-      pullNumber: 123,
-      updatedAt: '2026-05-03T10:11:12Z'
-    }),
-    'https://striff.io/api/v1/github/striffs/prefetch-artifacts?updated_at=2026-05-03T10%3A11%3A12Z&owner=openai&repo=demo+repo&pull_number=123'
-  );
 });
 
 test('shouldAllowProxyUrl allows static hosts, loopback, and configured api origin only', () => {

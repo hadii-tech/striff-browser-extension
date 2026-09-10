@@ -2310,87 +2310,15 @@ const setRemoteConfigUrlData = async (jsonObj) => {
     warn('AI review manual checks failed; continuing with remaining tests');
   }
 
-  // --- Prefetch validation (console-log based) ---
-  // Content scripts run in an isolated world, so window.Striffs is not accessible
-  // from page.evaluate(). Instead we verify prefetch via console logs the extension emits.
-
-  log('Prefetch: clearing cache to force a live prefetch request');
+  // Reset the live diagram so the mapping checks below run against a freshly generated one. This
+  // used to happen as a side effect of the prefetch checks; without it they ran against the diagram
+  // the AI review checks left behind, whose component maps were empty (path->component=0), and
+  // every mapping assertion degraded to a warning.
   const clearResult = await runStriffsTestHook('clearStriffsCache', {}, 5000);
   if (clearResult?.ok) {
-    pass('Prefetch cache cleared before live prefetch test');
+    pass('Live diagram reset before the mapping checks');
   } else {
-    warn(`Prefetch cache clear returned: ${JSON.stringify(clearResult)}`);
-  }
-
-  log('Prefetch: triggering fresh prefetch via test hook (cache cleared)');
-  const hookResult = await runStriffsTestHook('maybePrefetchStriffs', { resetKey: true }, 15000);
-  log('Prefetch hook result', JSON.stringify(hookResult));
-
-  // Collect fresh prefetch logs (only after cache clear)
-  await page.waitForTimeout(2000);
-  const prefetchSubmittedLogs = pageLogs.filter(l =>
-    /Prefetch submitted/.test(l || '')
-  );
-  const artifactPrefetchLogs = pageLogs.filter(l =>
-    /Artifact prefetch submitted/.test(l || '')
-  );
-  const prefetchSkippedLogs = pageLogs.filter(l => /Prefetch skipped/.test(l || ''));
-  const prefetchFailedLogs = pageLogs.filter(l => /Prefetch request failed/.test(l || ''));
-
-  if (hookResult === true) {
-    pass('Prefetch request submitted after cache clear (live API hit)');
-  } else if (prefetchSubmittedLogs.length > 0 || artifactPrefetchLogs.length > 0) {
-    pass(`Prefetch request submitted (${prefetchSubmittedLogs.length} token, ${artifactPrefetchLogs.length} artifact)`);
-  } else if (prefetchSkippedLogs.length > 0 && !hookResult) {
-    fail(`Prefetch was skipped even after cache clear: ${prefetchSkippedLogs[prefetchSkippedLogs.length - 1]}`);
-  } else if (prefetchFailedLogs.length > 0) {
-    fail(`Prefetch request failed after cache clear: ${prefetchFailedLogs[prefetchFailedLogs.length - 1]}`);
-  } else if (hookResult === false) {
-    fail(`Prefetch returned false after cache clear — API may not support prefetch endpoint`);
-  } else if (hookResult?.reason?.startsWith?.('timeout')) {
-    warn('Prefetch hook timed out (hook may not be registered)');
-  } else {
-    fail(`Prefetch unexpected result after cache clear: ${JSON.stringify(hookResult)}`);
-  }
-
-  // Test: prefetch returned HTTP 200 (check timings in the submitted log)
-  const prefetchTimingsMatch = prefetchSubmittedLogs.map(l => {
-    const m = l.match(/timings[:\s]+\{([^}]*)\}/);
-    if (m) {
-      const statusMatch = m[1].match(/status:\s*(\d+)/);
-      return statusMatch ? parseInt(statusMatch[1], 10) : null;
-    }
-    // Also try JSON-like timings
-    const statusMatch = l.match(/"status"\s*:\s*(\d+)/);
-    return statusMatch ? parseInt(statusMatch[1], 10) : null;
-  }).filter(s => s !== null);
-
-  if (prefetchTimingsMatch.length > 0) {
-    const all200 = prefetchTimingsMatch.every(s => s === 200);
-    if (all200) {
-      pass(`Prefetch returned HTTP 200 (checked ${prefetchTimingsMatch.length} request(s))`);
-    } else {
-      fail(`Prefetch returned non-200 status: ${prefetchTimingsMatch.join(', ')}`);
-    }
-  } else if (artifactPrefetchLogs.length > 0) {
-    // Artifact prefetch doesn't include status in console log — if submitted, it succeeded
-    pass('Artifact prefetch submitted successfully (200 implied)');
-  } else if (prefetchSubmittedLogs.length === 0 && hookResult !== true) {
-    warn('No prefetch timings to verify (prefetch was not submitted)');
-  }
-
-  // Test: prefetch used the correct mode (token vs artifact)
-  const tokenModeLogs = prefetchSubmittedLogs.filter(l => /mode:\s*['"]?token['"]?/.test(l || ''));
-  if (tokenProvided) {
-    if (tokenModeLogs.length > 0) {
-      pass('Prefetch used token-backed path');
-    } else if (artifactPrefetchLogs.length > 0) {
-      warn('GH_TOKEN provided but prefetch used artifact path instead of token path');
-    } else {
-      warn('Could not verify prefetch mode (no submitted logs with token flag)');
-    }
-  } else if (artifactPrefetchLogs.length > 0) {
-    pass('Prefetch used artifact-based path (no token)');
+    warn(`Live diagram reset returned: ${JSON.stringify(clearResult)}`);
   }
 
   // File tree click should NOT switch to Striffs when in diffs view.
@@ -4219,10 +4147,10 @@ const setRemoteConfigUrlData = async (jsonObj) => {
 
   if (tokenProvided) {
     // The primary request is the upload path now, so it no longer demonstrates that a stored token
-    // reaches GitHub. Assert that where the token is still what makes the call possible: the
-    // token-backed prefetch, and the PR file metadata fetched from the API rather than scraped.
+    // reaches GitHub. Assert that where the token is still what makes the call possible: the PR
+    // file metadata fetched from the API rather than scraped.
     const tokenPathSeen = bgLogs.some((l) =>
-      /prefetchStriffsWithToken|fetchStriffsWithToken|mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
+      /fetchStriffsWithToken|mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     ) || pageLogs.some((l) =>
       /mode:\s*['"]?token['"]?|Striffs request \(token\)|Striffs timings.*token/i.test(l || '')
     );
@@ -4500,7 +4428,6 @@ const setRemoteConfigUrlData = async (jsonObj) => {
           primeCacheProbe: dataset.striffsPrimeCacheProbe || null,
           primeCacheStatus: dataset.striffsPrimeCacheStatus || null,
           cachedAiReviewStatus,
-          prefetchRequestKey: window.Striffs?.__lastPrefetchRequestKey || null,
           engagementWriteToken: window.Striffs?.__engagementCtx?.engagementWriteToken || null,
           cachedEngagementContext: (() => {
             try {
@@ -4617,14 +4544,6 @@ const setRemoteConfigUrlData = async (jsonObj) => {
       pass('Cache stores base diagram only (no AI review status)');
     } else {
       warn(`Cache has cachedAiReviewStatus=${cachedAiStatus} — enriched diagrams should not be cached`);
-    }
-
-    // Verify no redundant prefetch request was made (cache was fresh)
-    const prefetchKey = reloadCacheDiag?.prefetchRequestKey;
-    if (!prefetchKey) {
-      pass('No redundant prefetch request (prefetch skipped for fresh cache)');
-    } else {
-      warn(`Prefetch request was sent despite fresh cache (key=${prefetchKey})`);
     }
 
     // Verify engagement context was restored after reload

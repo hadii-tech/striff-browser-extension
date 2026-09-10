@@ -37,11 +37,7 @@
     // cover a full analysis (measured 177-483s) plus polling overhead, not just a single POST.
     bgGenerate: 360000,
     bgToken: 180000,
-    bgPrefetch: 30000,
-    bgArtifactPrefetch: 180000,
   });
-  S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES = 50;
-  S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES_BYTES = 15 * 1024 * 1024;
 
   // Route the common (public-repo) analysis through the queued, polled upload path instead of the
   // synchronous server-fetch GET. The upload is filtered to the files the analysis reads and then
@@ -64,8 +60,6 @@
   S.__striffsReady = false;
   S.__striffsNoChanges = false;
   S.__lastFetchedUpdatedAt = null;
-  S.__lastPrefetchRequestKey = null;
-  S.__prefetchPromise = null;
   S.__styleInjected = false;
   S.__waitingForToken = false;
   S.__striffsZoom = 1;
@@ -958,9 +952,9 @@
   S.clog = (...a) => { try { if (S.isDebug?.()) console.log('[Striffs]', ...a); } catch { } };
   S.cinfo = (...a) => { try { if (S.isDebug?.()) console.info('[Striffs]', ...a); } catch { } };
   // Gated, per docs/CODE_REVIEW_PLAN.md §3 option (a). cwarn is where this file reports what it has
-  // already handled -- a remote config that did not answer, a prefetch that timed out, a cache read
-  // that fell back -- and none of that is the user's console to fill. cerr below stays
-  // unconditional, for a failure nothing handled.
+  // already handled -- a remote config that did not answer, a cache read that fell back -- and
+  // none of that is the user's console to fill. cerr below stays unconditional, for a failure
+  // nothing handled.
   S.cwarn = (...a) => { try { if (S.isDebug?.()) console.warn('[Striffs]', ...a); } catch { } };
   S.cerr = (...a) => { try { console.error('[Striffs]', ...a); } catch { } };
   S.debugDump = (label, payload) => {
@@ -1529,8 +1523,6 @@
     S.__supportedExtensionsFetchedAt = 0;
     S.__supportedExtensionsPromise = null;
     S.__suppressCacheWritesUntil = Date.now() + 2000;
-    S.__lastPrefetchRequestKey = null;
-    S.__prefetchPromise = null;
     S.__engagementRefreshPromise = null;
     S.__lastEngagementContextError = null;
     S.__engagementCtx = { sessionId: null, operationId: null, engagementWriteToken: null };
@@ -5464,8 +5456,6 @@
     // it on remount, so a lingering success state shows the old PR's green check.
     try { S.updateStriffButton?.({ tooltip: "Click to generate Striffs" }); } catch {}
     S.__lastFetchedUpdatedAt = null;
-    S.__lastPrefetchRequestKey = null;
-    S.__prefetchPromise = null;
     S.__lastLoadSource = 'none';
     S.__debugLastApiResponse = null;
 
@@ -9351,187 +9341,6 @@
     return payload;
   }
 
-  function buildPrefetchRequestKey(meta) {
-    const owner = String(meta?.owner || '').trim();
-    const repo = String(meta?.repo || '').trim();
-    const pullNumber = String(meta?.pull_number || '').trim();
-    const updatedAt = String(meta?.updated_at || '').trim();
-    if (!owner || !repo || !pullNumber || !updatedAt) return '';
-    return `${owner}/${repo}#${pullNumber}@${updatedAt}`;
-  }
-
-  async function submitArtifactPrefetch(meta, token, prFiles = []) {
-    // Prefetch fires from completeFilesPageBoot on a short timer, so it can beat the
-    // PR header into the DOM and read incomplete refs. It is a warm-up, not a
-    // requirement: skip this round rather than fetch against a branch we could not
-    // identify. The user-initiated request runs later against a settled page.
-    const prefetchRefs = S.extractHeadBaseRefs();
-    if (!prefetchRefs?.headOwner || !prefetchRefs?.headRepo || !prefetchRefs?.headBranch) {
-      S.cinfo?.('Artifact prefetch skipped: PR refs not resolvable yet', {
-        headOwner: prefetchRefs?.headOwner || null,
-        headRepo: prefetchRefs?.headRepo || null,
-        headBranch: prefetchRefs?.headBranch || null
-      });
-      return false;
-    }
-
-    const { refs, changedFiles } = await collectZipRequestArtifacts(meta, {
-      quiet: true,
-      token,
-      prFiles
-    });
-    const changedFilesCount = Array.isArray(changedFiles) ? changedFiles.length : 0;
-    const changedFilesBytes = sumChangedFilesContentBytes(changedFiles);
-    if (changedFilesCount < 1) {
-      return false;
-    }
-    if (changedFilesCount > S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES) {
-      S.cinfo?.('Artifact prefetch skipped: changed files count exceeds limit', {
-        changedFilesCount,
-        limit: S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES
-      });
-      return false;
-    }
-    if (changedFilesBytes > S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES_BYTES) {
-      S.cinfo?.('Artifact prefetch skipped: changed file bytes exceed limit', {
-        changedFilesBytes,
-        limit: S.PREFETCH_ARTIFACT_MAX_CHANGED_FILES_BYTES
-      });
-      return false;
-    }
-
-    const changedFilesStorageKey = await storeTempChangedFiles(changedFiles);
-    const resp = await S.bgRequest({
-      type: 'prefetchStriffsWithArtifacts',
-      baseOwner: refs.baseOwner,
-      baseRepo: refs.baseRepo,
-      baseBranch: refs.baseBranch,
-      changedFilesStorageKey,
-      owner: meta.owner,
-      repo: meta.repo,
-      pull_number: meta.pull_number,
-      updated_at: meta.updated_at
-    }, timeoutFor('bgArtifactPrefetch', timeoutFor('message', 7000)));
-    if (!resp?.ok) {
-      throw new Error(resp?.error || 'artifact prefetch request failed');
-    }
-    S.cinfo?.('Artifact prefetch submitted', {
-      owner: meta.owner,
-      repo: meta.repo,
-      pull_number: meta.pull_number,
-      updated_at: meta.updated_at,
-      changedFilesCount,
-      changedFilesBytes,
-      timings: resp?.timings || null
-    });
-    return true;
-  }
-
-  const isPRPrefetchEligible = () => {
-    try {
-      const utils = window.StriffsPrMetadataUtils || {};
-      const state = utils.resolvePrStateFromDocument?.(document) ?? null;
-      if (!state) {
-        S.cinfo?.('PR state not detected in DOM; allowing prefetch');
-      }
-      return utils.isPrStatePrefetchEligible
-        ? utils.isPrStatePrefetchEligible(state)
-        : state !== 'merged' && state !== 'closed';
-    } catch {
-      // A detection failure must not disable prefetch.
-      return true;
-    }
-  };
-
-  S.maybePrefetchStriffs = async () => {
-    if (S.__disabledByRemote) {
-      S.cinfo?.('Prefetch skipped: disabled by remote config');
-      return false;
-    }
-    if (!isPRPrefetchEligible()) {
-      S.cinfo?.('Prefetch skipped: pull request is merged or closed');
-      return false;
-    }
-    const meta = S.extractPRMetadata?.() || null;
-    const key = buildPrefetchRequestKey(meta);
-    if (!key) {
-      S.cinfo?.('Prefetch skipped: could not build request key');
-      return false;
-    }
-    if (S.__lastPrefetchRequestKey === key) {
-      return S.__prefetchPromise || false;
-    }
-
-    const cached = await readCachedDiagram(meta);
-    if (cached) {
-      S.cinfo?.('Prefetch skipped: fresh cache available');
-      S.__lastPrefetchRequestKey = null;
-      return false;
-    }
-
-    S.__lastPrefetchRequestKey = key;
-    S.__prefetchPromise = (async () => {
-      const bgReady = await S.waitForBackgroundReady?.({ attempts: 8, delayMs: 200 });
-      if (!bgReady) {
-        throw new Error('background not ready for prefetch');
-      }
-      const token = await S.getStoredToken?.();
-      const eligibility = await resolvePrefetchEligibility(meta, token);
-      if (!eligibility?.eligible) {
-        S.cinfo?.('Prefetch skipped: no eligible source files', {
-          owner: meta.owner,
-          repo: meta.repo,
-          pull_number: meta.pull_number,
-          updated_at: meta.updated_at
-        });
-        return false;
-      }
-
-      if (token) {
-        const resp = await S.bgRequest({
-          type: 'prefetchStriffsWithToken',
-          owner: meta.owner,
-          repo: meta.repo,
-          pull_number: meta.pull_number,
-          updated_at: meta.updated_at,
-          token
-        }, timeoutFor('bgPrefetch', timeoutFor('message', 7000)));
-        if (!resp?.ok) {
-          throw new Error(resp?.error || 'prefetch request failed');
-        }
-        S.cinfo?.('Prefetch submitted', {
-          owner: meta.owner,
-          repo: meta.repo,
-          pull_number: meta.pull_number,
-          updated_at: meta.updated_at,
-          mode: 'token',
-          timings: resp?.timings || null
-        });
-        return true;
-      }
-
-      return await submitArtifactPrefetch(meta, token, eligibility.prFiles || []);
-    })();
-
-    try {
-      return await S.__prefetchPromise;
-    } catch (err) {
-      const message = String(err?.message || err);
-      if (/background not ready|unknown message type|Receiving end does not exist|No service worker|timeout/i.test(message)) {
-        S.__lastPrefetchRequestKey = null;
-      }
-      S.cwarn?.('Prefetch request failed', {
-        key,
-        error: message
-      });
-      return false;
-    } finally {
-      if (S.__lastPrefetchRequestKey === key) {
-        S.__prefetchPromise = null;
-      }
-    }
-  };
-
   function normalizeChangedFilePath(path) {
     return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '').trim();
   }
@@ -9789,58 +9598,6 @@
     }
   }
 
-  function isSupportedPrefetchPath(path, supportedExts) {
-    const normalizedPath = normalizeChangedFilePath(path);
-    if (!normalizedPath) return false;
-    return S.checkIfRelevantFilesExist?.([normalizedPath], supportedExts) === true;
-  }
-
-  function countProcessablePrefetchFiles(prFiles, supportedExts) {
-    if (!Array.isArray(prFiles) || !Array.isArray(supportedExts) || !supportedExts.length) return 0;
-    let count = 0;
-    for (const file of prFiles) {
-      const status = String(file?.status || 'modified').trim().toLowerCase();
-      const path = normalizeChangedFilePath(file?.filename || file?.path);
-      const previousPath = normalizeChangedFilePath(file?.previous_filename || file?.previousPath);
-      if (status === 'removed') continue;
-      if (isSupportedPrefetchPath(path, supportedExts) || (status === 'renamed' && isSupportedPrefetchPath(previousPath, supportedExts))) {
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  function sumChangedFilesContentBytes(changedFiles) {
-    return (Array.isArray(changedFiles) ? changedFiles : []).reduce((total, file) => {
-      const content = typeof file?.content === 'string' ? file.content : '';
-      return total + new TextEncoder().encode(content).length;
-    }, 0);
-  }
-
-  async function resolvePrefetchEligibility(meta, token) {
-    await S.ensureSupportedExtensionsReady?.();
-    const supportedExts = Array.isArray(S.__supportedExtensionsForUi) ? S.__supportedExtensionsForUi : [];
-    if (!supportedExts.length) {
-      return { eligible: false, prFiles: [] };
-    }
-
-    const visibleFiles = S.getFilesInPR?.() || [];
-    if (Array.isArray(visibleFiles) && visibleFiles.length >= 1 && S.checkIfRelevantFilesExist?.(visibleFiles, supportedExts)) {
-      return { eligible: true, prFiles: [] };
-    }
-
-    try {
-      const prFiles = await resolvePrFilesMetadata(meta, [], token);
-      return {
-        eligible: countProcessablePrefetchFiles(prFiles, supportedExts) >= 1,
-        prFiles
-      };
-    } catch (error) {
-      S.cwarn?.('Prefetch eligibility check failed', error);
-      return { eligible: false, prFiles: [] };
-    }
-  }
-
   async function fetchHeadFileContent(refs, path, token) {
     const normalizedPath = normalizeChangedFilePath(path);
     if (!normalizedPath) return null;
@@ -9914,11 +9671,9 @@
     return rawResp.text;
   }
 
-  async function buildChangedFiles(refs, meta, filterFiles, { token = null, prFiles = null } = {}) {
+  async function buildChangedFiles(refs, meta, filterFiles, { token = null } = {}) {
     const effectiveToken = typeof token === 'string' ? token : await S.getStoredToken();
-    const resolvedPrFiles = Array.isArray(prFiles) && prFiles.length
-      ? prFiles
-      : await resolvePrFilesMetadata(meta, filterFiles, effectiveToken);
+    const resolvedPrFiles = await resolvePrFilesMetadata(meta, filterFiles, effectiveToken);
 
     const supportedExts = Array.isArray(S.__supportedExtensionsForUi) ? S.__supportedExtensionsForUi : [];
     const hasSupportedExtFilter = supportedExts.length > 0;
@@ -9951,13 +9706,13 @@
     return changedFiles;
   }
 
-  async function collectZipRequestArtifacts(meta, { quiet = false, token = null, prFiles = null } = {}) {
+  async function collectZipRequestArtifacts(meta, { quiet = false, token = null } = {}) {
     const filterFiles = S.getFilterFilesFromNav();
     const refs = S.extractHeadBaseRefs();
     if (!quiet) {
       S.updateStriffButton({ loading: true, phase: "Fetching", tooltip: "Fetching" });
     }
-    const changedFiles = await buildChangedFiles(refs, meta, filterFiles, { token, prFiles });
+    const changedFiles = await buildChangedFiles(refs, meta, filterFiles, { token });
     return { refs, filterFiles, changedFiles };
   }
 
@@ -10624,28 +10379,9 @@
           });
         return;
       }
-      if (data.fn === 'maybePrefetchStriffs') {
-        if (data.resetKey && S.__lastPrefetchRequestKey != null) S.__lastPrefetchRequestKey = null;
-        Promise.resolve(S.maybePrefetchStriffs?.())
-          .then((result) => {
-            window.postMessage({ type: 'STRIFFS_TEST_RESULT', id: data.id, result: result === undefined ? null : result, key: S.__lastPrefetchRequestKey || null }, '*');
-          })
-          .catch((e) => {
-            window.postMessage({ type: 'STRIFFS_TEST_RESULT', id: data.id, result: { error: String(e?.message || e) } }, '*');
-          });
-        return;
-      }
       if (data.fn === 'setRemoteDisabled') {
         S.__disabledByRemote = !!data.disabled;
         window.postMessage({ type: 'STRIFFS_TEST_RESULT', id: data.id, result: S.__disabledByRemote }, '*');
-        return;
-      }
-      if (data.fn === 'getPrefetchState') {
-        window.postMessage({ type: 'STRIFFS_TEST_RESULT', id: data.id, result: {
-          lastKey: S.__lastPrefetchRequestKey || null,
-          disabled: S.__disabledByRemote || false,
-          prefetchPromise: !!S.__prefetchPromise,
-        } }, '*');
         return;
       }
       if (data.fn === 'getLoadSource') {
@@ -11489,9 +11225,6 @@
     S.ensureFilesObserver?.(filesRoot);
     S.buildFilePathToDiffIdMapAsync?.();
     S.refreshSupportedFilesState?.();
-    setTimeout(() => {
-      try { S.maybePrefetchStriffs?.(); } catch {}
-    }, 500);
     const cacheStatus = await S.primeDiagramFromCache?.();
     await S.restoreViewAfterBoot?.({ cacheStatus });
     return true;
@@ -11530,10 +11263,6 @@
     S.__striffsErrors.push({ where: 'addSpinAnimation', error: String(e) });
     S.cerr?.('addSpinAnimation failed', e);
   }
-
-  setTimeout(() => {
-    try { S.maybePrefetchStriffs?.(); } catch {}
-  }, 500);
 
   if (!onFilesPage) {
     return;
@@ -11628,10 +11357,6 @@
           S.__activePrScopeKey = null;
         }
       } catch {}
-
-      setTimeout(() => {
-        try { S.maybePrefetchStriffs?.(); } catch {}
-      }, 500);
 
       if (!isPRFiles(location.pathname)) return;
 
@@ -11761,7 +11486,7 @@
 
     // Polling fallback: Turbo can navigate without firing turbo:load/turbo:render
     // or disconnecting the MutationObserver (e.g. full head replacement from cache).
-    // This lightweight interval ensures prefetch still kicks off when the URL changes
+    // This lightweight interval ensures boot still kicks off when the URL changes
     // to a PR page. Stopped after detection to avoid unnecessary CPU usage.
     navIntervalId = setInterval(() => {
       if (location.pathname !== lastPath) {
