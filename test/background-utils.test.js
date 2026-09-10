@@ -15,6 +15,7 @@ const {
   readApiErrorResponse,
   selectChromeStorageCacheKeys,
   shouldAllowProxyUrl,
+  withoutUnexpectedAuthorization,
 } = require('../src/background-utils.js');
 
 test('normalizeApiBase trims whitespace and trailing slashes', () => {
@@ -115,4 +116,23 @@ test('readApiErrorResponse prefers structured json error payloads', async () => 
 test('isGithubPullRequestUrl matches only pull request pages', () => {
   assert.equal(isGithubPullRequestUrl('https://github.com/openai/openai/pull/123/files'), true);
   assert.equal(isGithubPullRequestUrl('https://github.com/openai/openai/issues/123'), false);
+});
+
+test('withoutUnexpectedAuthorization keeps the token for GitHub API hosts only', () => {
+  const headers = { Accept: 'application/vnd.github+json', Authorization: 'token secret' };
+  assert.deepEqual(withoutUnexpectedAuthorization('https://api.github.com/repos/o/r/pulls/1', headers), headers);
+  assert.deepEqual(withoutUnexpectedAuthorization('https://raw.githubusercontent.com/o/r/abc/A.java', headers), headers);
+  // The proxy allows these, but they are not hosts the token is for.
+  for (const url of [
+    'https://codeload.github.com/o/r/zip/main',
+    'https://striffs-config.tor1.cdn.digitaloceanspaces.com/config.json',
+    'http://localhost:8080/api/v1/health',
+    'https://api.striff.io/api/v1/languages',
+    'not a url'
+  ]) {
+    assert.deepEqual(
+      withoutUnexpectedAuthorization(url, { ...headers, authorization: 'token secret' }),
+      { Accept: 'application/vnd.github+json' }
+    );
+  }
 });

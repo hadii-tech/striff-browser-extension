@@ -9370,6 +9370,15 @@
     return new TextDecoder('utf-8').decode(bytes);
   }
 
+  // GitHub answers 401 to a token it no longer accepts, and every caller here falls back -- to the
+  // page, to raw files, to the session -- so the user was never told the token they saved had
+  // stopped working. Said once per page.
+  function noteRejectedToken() {
+    if (S.__rejectedTokenNoticeShown) return;
+    S.__rejectedTokenNoticeShown = true;
+    S.toast?.("<strong>GitHub token rejected.</strong> It may have expired or been revoked. Update it in the extension popup.", "error", { html: true });
+  }
+
   async function fetchJsonWithTimeout(url, { token = null, headers = {}, timeoutMs = 20000, credentials = 'omit' } = {}) {
     const mergedHeaders = {
       Accept: 'application/vnd.github+json',
@@ -9387,6 +9396,7 @@
         timeoutMs,
         returnHeaders: true
       }, timeoutMs);
+      if (token && Number(resp?.status) === 401) noteRejectedToken();
       return {
         ok: resp?.ok === true,
         status: Number(resp?.status || 0),
@@ -9405,6 +9415,7 @@
         cache: 'no-cache',
         signal: ctrl.signal
       });
+      if (token && res.status === 401) noteRejectedToken();
       const contentType = String(res.headers.get('content-type') || '').toLowerCase();
       const body = contentType.includes('application/json')
         ? await res.json().catch(() => null)
@@ -9656,8 +9667,10 @@
     } catch {}
 
     const sessionBlobUrl = `https://github.com/${encodeURIComponent(refs.headOwner)}/${encodeURIComponent(refs.headRepo)}/blob/${encodeURIComponent(refs.headBranch)}/${encodeGitHubPath(normalizedPath)}?raw=1`;
+    // Served from the user's github.com session cookies. The token already had its turn on the API
+    // request above, so it is not sent here alongside them.
     const rawResp = await fetchTextWithTimeout(sessionBlobUrl, {
-      token,
+      token: null,
       timeoutMs: timeoutFor("githubRaw", 20000),
       credentials: 'include'
     });
@@ -9886,11 +9899,24 @@
       !status &&
       /failed to fetch|networkerror|network error|timeout|background request failed|port closed|receiving end does not exist/i.test(text);
 
+    // GitHub's 401: the saved token is no longer accepted. On the token route striff-api reports
+    // the same rejection as a 404, handled next.
+    if (status === 401 && token) {
+      return {
+        tooltip: "Your GitHub token was rejected. It may have expired or been revoked.",
+        toast: "<strong>GitHub token rejected.</strong> It may have expired or been revoked. Update it in the extension popup.",
+        tone: 'error',
+        disabled: true,
+        waitingForToken: true,
+        htmlToast: true
+      };
+    }
+
     if ((status === 404 && code === 'NOT_FOUND') || (status === 404 && !code)) {
       return {
         tooltip: "Pull request not found. Check the URL or verify access.",
         toast: token
-          ? "<strong>Access denied.</strong> Check that your token has access to this repo."
+          ? "<strong>Access denied.</strong> Check that your token is still valid and has access to this repo."
           : "Pull request not found. Check the URL or verify access.",
         tone: token ? 'error' : 'neutral',
         disabled: true,

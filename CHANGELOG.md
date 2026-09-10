@@ -2,6 +2,12 @@
 
 ## 1.1.0
 
+- A GitHub token that stops working is reported. GitHub's 401 for an expired or revoked token was
+  absorbed by the fallbacks behind every GitHub call, so the popup kept saying "Token saved" while
+  nothing used it; the page now says the token was rejected and to update it. The token is also held
+  closer: the background proxy forwards it only to `api.github.com` and `raw.githubusercontent.com`
+  rather than to every host it is allowed to reach, and the github.com fallback that reads a file
+  through the user's session no longer sends the token alongside the cookies.
 - A slow first analysis is no longer sent twice. The page gave up on the background after 6
   minutes while the background kept polling for up to 15, and a timeout counts as retryable, so a
   long analysis re-downloaded and re-uploaded the repository and polled a second time beside the

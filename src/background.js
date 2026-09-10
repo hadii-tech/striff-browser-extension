@@ -804,7 +804,13 @@ const handlers = {
 
     const t = abortableTimeout(timeoutMs);
     try {
-      const init = { method, headers, signal: t.signal, cache: 'no-cache' };
+      // Allowed is not the same as trusted with the token: see withoutUnexpectedAuthorization.
+      const init = {
+        method,
+        headers: BgUtils.withoutUnexpectedAuthorization(url, headers),
+        signal: t.signal,
+        cache: 'no-cache'
+      };
       if (method !== 'GET' && body != null) init.body = body;
       const res = await fetch(url, init);
       const status = res.status;

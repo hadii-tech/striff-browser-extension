@@ -65,6 +65,22 @@ const StriffsBackgroundUtilsFactory = (() => {
     }
   }
 
+  // The only hosts the GitHub token is for. The proxy allow-list above is wider -- codeload, the
+  // config CDN, loopback, the Striff API -- and the proxy used to forward any Authorization header to
+  // all of them. Nothing sends one there today; this keeps it that way.
+  const TOKEN_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com']);
+
+  function withoutUnexpectedAuthorization(rawUrl, headers = {}) {
+    let host = '';
+    try { host = new URL(String(rawUrl || '')).hostname; } catch (_) {}
+    if (TOKEN_HOSTS.has(host)) return { ...headers };
+    const result = {};
+    for (const [key, value] of Object.entries(headers || {})) {
+      if (String(key).toLowerCase() !== 'authorization') result[key] = value;
+    }
+    return result;
+  }
+
   function selectChromeStorageCacheKeys(items) {
     return Object.keys(items || {}).filter((key) => {
       if (!key) return false;
@@ -184,6 +200,7 @@ const StriffsBackgroundUtilsFactory = (() => {
     readApiErrorResponse,
     selectChromeStorageCacheKeys,
     shouldAllowProxyUrl,
+    withoutUnexpectedAuthorization,
   };
   return api;
 })();
