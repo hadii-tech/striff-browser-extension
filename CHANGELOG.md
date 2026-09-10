@@ -2,6 +2,13 @@
 
 ## 1.1.0
 
+- "Create one here" opens a fine-grained token already filled in: named Striffs, read-only
+  Contents and Pull requests, 364 days. The link used to open a blank form and leave the
+  permissions to the user; the only choice left is "All repositories". Not a classic token, whose
+  `repo` scope grants write access to every private repository.
+- Clearing the token also clears cached diagrams, in storage and in open pull request tabs. A
+  private repository's diagram can only have been produced with the token, and it stayed on screen
+  for up to a day after the user had taken the extension's access away.
 - Connecting a GitHub token no longer puts a cold analysis on the slower path. Public pull
   requests now go through the queued, polled upload route regardless of whether a token is stored;
   the token GET held a socket open for the whole analysis, measured at 177-483 seconds against a

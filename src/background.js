@@ -447,6 +447,21 @@ async function clearGithubLocalStorages({ senderTabId = null, senderUrl = "" } =
   }
 }
 
+async function clearAllStriffsCaches({ senderTabId = null, senderUrl = "" } = {}) {
+  const clearAt = Date.now();
+  try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
+  clearRuntimeCaches();
+  await clearChromeStorageCaches();
+  await clearIndexedDbCaches();
+  await cleanupOrphanedTempKeys();
+  const tabsTouched = await clearGithubLocalStorages({ senderTabId, senderUrl });
+  // Run a second pass to remove any keys re-written by active tabs during clear.
+  await clearChromeStorageCaches();
+  await clearIndexedDbCaches();
+  try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
+  return { tabsTouched, clearAt };
+}
+
 const LOCAL_TOKEN_KEY = 'ghToken';
 
 async function clearTokenFromStorage() {
@@ -555,20 +570,10 @@ async function lazyCacheCleanup() {
 const handlers = {
   clearStriffsCaches: async (msg, { safeReply }) => {
     try {
-      const clearAt = Date.now();
-      try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
-      clearRuntimeCaches();
-      await clearChromeStorageCaches();
-      await clearIndexedDbCaches();
-      await cleanupOrphanedTempKeys();
-      const tabsTouched = await clearGithubLocalStorages({
+      const { tabsTouched, clearAt } = await clearAllStriffsCaches({
         senderTabId: Number.isInteger(msg?.senderTabId) ? msg.senderTabId : null,
         senderUrl: msg?.senderUrl || ""
       });
-      // Run a second pass to remove any keys re-written by active tabs during clear.
-      await clearChromeStorageCaches();
-      await clearIndexedDbCaches();
-      try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
       safeReply({ ok: true, tabsTouched, cacheClearAt: clearAt });
     } catch (e) {
       safeReply({ ok: false, error: String(e?.message || e) });
@@ -580,6 +585,9 @@ const handlers = {
   forgetToken: async (msg, { safeReply }) => {
     try {
       await clearTokenFromStorage();
+      // Private-repo diagrams can only have been produced with the token; keeping them cached
+      // would leave them on screen after the user revoked the extension's access.
+      await clearAllStriffsCaches();
       const hasToken = await broadcastTokenState();
       safeReply({ ok: true, hasToken });
     } catch (e) {
