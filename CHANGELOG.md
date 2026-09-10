@@ -18,6 +18,10 @@
 - Clearing the token also clears cached diagrams, in storage and in open pull request tabs. A
   private repository's diagram can only have been produced with the token, and it stayed on screen
   for up to a day after the user had taken the extension's access away.
+- Uploads send `Prefer: respond-async` and poll the job the API answers with. The API now holds a
+  request that does not ask for it until the analysis finishes, which is how 1.0.x -- which cannot
+  poll, and since 2026-08-23 had read the 202 job as a result and shown "missing striffs array" on
+  every first analysis -- works again without an update.
 - Connecting a GitHub token no longer puts a cold analysis on the slower path. Public pull
   requests now go through the queued, polled upload route regardless of whether a token is stored;
   the token GET held a socket open for the whole analysis, measured at 177-483 seconds against a

@@ -245,7 +245,15 @@ async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { tim
 
   const t = abortableTimeout(timeoutMs);
   try {
-    const res = await fetch(apiUrl, { method: 'POST', body: fd, signal: t.signal });
+    // RFC 7240: ask for 202 and a job to poll. Without it the API holds the request until the
+    // analysis finishes (for up to 170s), which is how it keeps the 1.0.x extension -- which cannot
+    // poll -- working; this client can, and would rather not hold a socket open for minutes.
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      body: fd,
+      headers: { Prefer: 'respond-async' },
+      signal: t.signal
+    });
     if (!res.ok) {
       const parsed = await readApiErrorResponse(res);
       return {
