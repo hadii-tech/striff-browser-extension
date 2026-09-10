@@ -33,9 +33,12 @@
     message: 7000,
     ping: 1000,
     waitForToolbar: 8000,
-    // The upload path is queued and polled to completion in the background (ADR-035), so this must
-    // cover a full analysis (measured 177-483s) plus polling overhead, not just a single POST.
-    bgGenerate: 360000,
+    // The upload path is queued and polled to completion in the background (ADR-035), so this has to
+    // outlast everything the background itself waits for: the base download (60s), the upload (180s)
+    // and the poll (analysis-job-client's 900s). At 360s it expired while the background was still
+    // polling, and bgRequest treats a timeout as retryable -- so it re-sent the whole download and
+    // upload and started a second poll beside the first.
+    bgGenerate: 1200000,
     bgToken: 180000,
   });
 
@@ -10174,15 +10177,14 @@
       const meta = S.extractPRMetadata();
       const { updated_at } = meta;
 
-      // If no token, suggest adding one if generation takes too long
-      let tokenSuggestTimer = null;
-      if (!token) {
-        tokenSuggestTimer = setTimeout(() => {
-          if (S.__autoFetchPromise) {
-            S.toast?.("Generation is taking a while. Adding a GitHub token in the extension popup may speed things up.", "warning", { timeoutMs: 15000 });
-          }
-        }, 30000);
-      }
+      // A first analysis takes minutes (177-483s measured, plus any queue), token or not: a public
+      // pull request goes through the upload route either way, so suggesting a token here promised
+      // a speed-up it could not deliver. Said once, so a long wait reads as expected, not stuck.
+      const slowNoticeTimer = setTimeout(() => {
+        if (S.__autoFetchPromise) {
+          S.toast?.("The first analysis of a pull request takes a few minutes. After that it loads from cache.", "info", { timeoutMs: 15000 });
+        }
+      }, 30000);
 
       const requestMode = token ? 'token' : 'zips';
       const debugCtx = await S.getStriffsDebugContext?.();
@@ -10251,7 +10253,7 @@
         terminalErrorMessage = message;
         return false;
       } finally {
-        if (tokenSuggestTimer) clearTimeout(tokenSuggestTimer);
+        clearTimeout(slowNoticeTimer);
         if (!skipReconcile) {
           S.reconcileStriffButtonState?.({ errorMessage: terminalErrorMessage });
         }

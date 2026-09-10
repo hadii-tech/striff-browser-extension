@@ -2,6 +2,12 @@
 
 ## 1.1.0
 
+- A slow first analysis is no longer sent twice. The page gave up on the background after 6
+  minutes while the background kept polling for up to 15, and a timeout counts as retryable, so a
+  long analysis re-downloaded and re-uploaded the repository and polled a second time beside the
+  first. The page now waits as long as the background can (20 minutes). The 30-second notice no
+  longer suggests a GitHub token -- public pull requests take the upload route either way, so a
+  token does not speed them up -- and says instead that a first analysis takes a few minutes.
 - The extension no longer prefetches. Every pull request page load, and every in-app navigation to
   another pull request, fired a background analysis request before anyone asked for a diagram -- a
   server-side fetch when a token was stored, otherwise a base-branch archive upload -- and its
