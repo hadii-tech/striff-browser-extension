@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+- The "first analysis takes a few minutes" notice appears only when a first analysis is running.
+  1.1.0 showed it whenever the diagram was not in the browser's own cache, but the server usually
+  already has the analysis and answers in about a second, so nearly every load promised minutes of
+  waiting and then finished at once. On the upload route the notice now waits for the server to
+  say it has queued an analysis (a 202 rather than a 200); on the token route, which gives no such
+  signal, it waits 10 seconds, longer than a cached answer takes. It closes when the diagram
+  arrives.
+
 ## 1.1.0
 
 - The wait for a first analysis is explained when it starts. The only notice appeared 30 seconds
