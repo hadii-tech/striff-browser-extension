@@ -233,7 +233,7 @@ async function downloadRepoZipAsArrayBuffer(owner, repo, ref, apiBase) {
 
 const readApiErrorResponse = BgUtils.readApiErrorResponse;
 
-async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { timeoutMs = 120000, apiBase = '' } = {}) {
+async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { timeoutMs = 120000, apiBase = '', onQueued = null } = {}) {
   const sanitizedChangedFiles = sanitizeChangedFilesPayload(changedFiles);
 
   // The archive arrives already filtered -- downloadRepoZipAsArrayBuffer is the only source of it
@@ -276,6 +276,7 @@ async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { tim
     if (!client) {
       return { ok: false, error: 'Cannot wait for a queued analysis: the job client failed to load.' };
     }
+    try { onQueued?.(); } catch {}
     return client.awaitAnalysisJob(json, apiBase, { abortableTimeout });
   } catch (e) {
     return { ok: false, error: String(e?.message || e) };
@@ -749,7 +750,16 @@ const handlers = {
       effectiveChangedFiles,
       // The submit itself is fast now -- it uploads and returns. The long wait is the poll that
       // follows, which carries its own budget, so this timeout covers the upload alone.
-      { timeoutMs: 180000, apiBase }
+      {
+        timeoutMs: 180000,
+        apiBase,
+        // Only a queued job means minutes of waiting; the tab says so then, and not on a 200.
+        onQueued: () => {
+          if (Number.isInteger(msg.senderTabId)) {
+            chrome.tabs.sendMessage(msg.senderTabId, { type: 'striffsAnalysisQueued' }).catch(() => {});
+          }
+        }
+      }
     );
     const postDurationMs = Date.now() - postStart;
     const totalDurationMs = Date.now() - overallStart;
