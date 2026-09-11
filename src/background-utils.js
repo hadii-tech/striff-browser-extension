@@ -171,9 +171,13 @@ const StriffsBackgroundUtilsFactory = (() => {
       }
     }
     const text = await res.text().catch(() => '');
+    // A proxy in front of the API -- nginx while a deploy restarts the pod -- answers with its own
+    // HTML page. That page is not a message: used as one, a 503 printed the whole document, markup
+    // and padding comments, into a toast.
+    const isHtml = contentType.includes('text/html') || /^\s*</.test(text);
     return {
       detail: text,
-      error: text || `API request failed: ${res.status}`,
+      error: isHtml ? `The Striffs service returned HTTP ${res.status}.` : (text || `API request failed: ${res.status}`),
       errorCode: null
     };
   }
