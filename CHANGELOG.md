@@ -2,6 +2,38 @@
 
 ## 1.1.0
 
+- A GitHub token that stops working is reported. GitHub's 401 for an expired or revoked token was
+  absorbed by the fallbacks behind every GitHub call, so the popup kept saying "Token saved" while
+  nothing used it; the page now says the token was rejected and to update it. The token is also held
+  closer: the background proxy forwards it only to `api.github.com` and `raw.githubusercontent.com`
+  rather than to every host it is allowed to reach, and the github.com fallback that reads a file
+  through the user's session no longer sends the token alongside the cookies.
+- A slow first analysis is no longer sent twice. The page gave up on the background after 6
+  minutes while the background kept polling for up to 15, and a timeout counts as retryable, so a
+  long analysis re-downloaded and re-uploaded the repository and polled a second time beside the
+  first. The page now waits as long as the background can (20 minutes). The 30-second notice no
+  longer suggests a GitHub token -- public pull requests take the upload route either way, so a
+  token does not speed them up -- and says instead that a first analysis takes a few minutes.
+- The extension no longer prefetches. Every pull request page load, and every in-app navigation to
+  another pull request, fired a background analysis request before anyone asked for a diagram -- a
+  server-side fetch when a token was stored, otherwise a base-branch archive upload -- and its
+  de-duplication key was built on an update time the page often could not supply, so the current
+  time stood in and a single view could fire it more than once. With a token stored, a public pull
+  request was prefetched on the token route while the real request went through the upload route,
+  whose results are keyed separately, so that work was never read. Requests now go out only when
+  the extension needs a diagram to show. striff-api drops the matching prefetch endpoints; 1.0.x
+  clients that still call them catch the error and log a console warning.
+- "Create one here" opens a fine-grained token already filled in: named Striffs, read-only
+  Contents and Pull requests, 364 days. The link used to open a blank form and leave the
+  permissions to the user; the only choice left is "All repositories". Not a classic token, whose
+  `repo` scope grants write access to every private repository.
+- Clearing the token also clears cached diagrams, in storage and in open pull request tabs. A
+  private repository's diagram can only have been produced with the token, and it stayed on screen
+  for up to a day after the user had taken the extension's access away.
+- Uploads send `Prefer: respond-async` and poll the job the API answers with. The API now holds a
+  request that does not ask for it until the analysis finishes, which is how 1.0.x -- which cannot
+  poll, and since 2026-08-23 had read the 202 job as a result and shown "missing striffs array" on
+  every first analysis -- works again without an update.
 - Connecting a GitHub token no longer puts a cold analysis on the slower path. Public pull
   requests now go through the queued, polled upload route regardless of whether a token is stored;
   the token GET held a socket open for the whole analysis, measured at 177-483 seconds against a
@@ -14,8 +46,7 @@
 - An architecture review that ends without being authorised now says so and stops, instead of
   retrying the same rejected request every five seconds until it times out.
 - `[Striffs]` warnings for conditions the extension already handled - a remote config that did not
-  answer, a prefetch that timed out, a cache read that fell back - no longer appear in the console
-  unless debug logging is on.
+  answer, a cache read that fell back - no longer appear in the console unless debug logging is on.
 
 - Documented rules render from the status the server actually sends. The panel had been splitting
   rows on a `tier` the API stopped sending and checking for a `RAISED` status it stopped producing,

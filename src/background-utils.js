@@ -65,22 +65,20 @@ const StriffsBackgroundUtilsFactory = (() => {
     }
   }
 
-  function buildGitHubPrefetchUrl(apiBase, owner, repo, pullNumber, updatedAt) {
-    const base = normalizeApiBase(apiBase);
-    if (!base) return '';
-    return `${base}/api/v1/github/striffs/prefetch/owners/${encodeURIComponent(owner || '')}/repos/${encodeURIComponent(repo || '')}/pulls/${encodeURIComponent(pullNumber || '')}?updated_at=${encodeURIComponent(updatedAt || '')}`;
-  }
+  // The only hosts the GitHub token is for. The proxy allow-list above is wider -- codeload, the
+  // config CDN, loopback, the Striff API -- and the proxy used to forward any Authorization header to
+  // all of them. Nothing sends one there today; this keeps it that way.
+  const TOKEN_HOSTS = new Set(['api.github.com', 'raw.githubusercontent.com']);
 
-  function buildArtifactPrefetchUrl(apiBase, { owner = '', repo = '', pullNumber = '', updatedAt = '' } = {}) {
-    const base = normalizeApiBase(apiBase);
-    if (!base) return '';
-    const params = new URLSearchParams();
-    if (updatedAt) params.set('updated_at', updatedAt);
-    if (owner) params.set('owner', owner);
-    if (repo) params.set('repo', repo);
-    if (pullNumber) params.set('pull_number', pullNumber);
-    const query = params.toString();
-    return `${base}/api/v1/github/striffs/prefetch-artifacts${query ? `?${query}` : ''}`;
+  function withoutUnexpectedAuthorization(rawUrl, headers = {}) {
+    let host = '';
+    try { host = new URL(String(rawUrl || '')).hostname; } catch (_) {}
+    if (TOKEN_HOSTS.has(host)) return { ...headers };
+    const result = {};
+    for (const [key, value] of Object.entries(headers || {})) {
+      if (String(key).toLowerCase() !== 'authorization') result[key] = value;
+    }
+    return result;
   }
 
   function selectChromeStorageCacheKeys(items) {
@@ -160,46 +158,6 @@ const StriffsBackgroundUtilsFactory = (() => {
     return result;
   }
 
-  // Pull the operation id, engagement write token and review status out of a prefetch reply so
-  // the prefetch flow can warm the /ai-review status endpoint too (issue #14, change 5). Pure --
-  // no network. Returns nulls when the reply does not carry what a warm needs, in which case the
-  // caller does nothing: warming is best-effort and its absence is never an error. Field names
-  // mirror the content script's extractEngagementContextFromPayload / getAiReviewStatusFromResult.
-  function extractAiReviewWarmTarget(payload) {
-    const seen = [];
-    const candidates = [
-      payload,
-      payload?.result,
-      payload?.data,
-      payload?.payload,
-      payload?.response,
-      payload?.body,
-      payload?.meta,
-      payload?.metadata,
-      payload?.engagement,
-      payload?.engagementContext,
-      payload?.context,
-      payload?.review,
-      payload?.aiReview,
-      Array.isArray(payload?.striffs) ? payload.striffs[0] : null
-    ].filter((v) => v && typeof v === 'object' && !seen.includes(v) && seen.push(v));
-    const readFirst = (keys) => {
-      for (const candidate of candidates) {
-        for (const key of keys) {
-          const value = String(candidate?.[key] || '').trim();
-          if (value) return value;
-        }
-      }
-      return '';
-    };
-    return {
-      operationId: readFirst(['operationId', 'operationID', 'operation_id']) || null,
-      engagementToken:
-        readFirst(['engagementWriteToken', 'engagementToken', 'engagement_write_token', 'engagement_token']) || null,
-      status: readFirst(['aiReviewStatus', 'ai_review_status', 'reviewStatus']).toUpperCase() || null
-    };
-  }
-
   async function readApiErrorResponse(res) {
     const contentType = String(res?.headers?.get?.('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
@@ -231,11 +189,8 @@ const StriffsBackgroundUtilsFactory = (() => {
     STATIC_PROXY_HOSTS,
     TEMP_CHANGED_FILES_PREFIX,
     TEMP_RESPONSE_PREFIX,
-    buildGitHubPrefetchUrl,
-    buildArtifactPrefetchUrl,
     buildCacheKeyPatterns,
     collectExpiredTempStorageKeys,
-    extractAiReviewWarmTarget,
     isGithubPullRequestUrl,
     isLoopbackHostname,
     normalizeApiBase,
@@ -245,6 +200,7 @@ const StriffsBackgroundUtilsFactory = (() => {
     readApiErrorResponse,
     selectChromeStorageCacheKeys,
     shouldAllowProxyUrl,
+    withoutUnexpectedAuthorization,
   };
   return api;
 })();

@@ -92,7 +92,7 @@ async function init() {
     try {
       await shared.clearTokenEverywhere();
       input.value = "";
-      setStatus("Token cleared.", "ok");
+      setStatus("Token and cached diagrams cleared.", "ok");
       await refreshBadgeFromStorage();
       if (overwritePrompt) overwritePrompt.style.display = "none";
     } catch (e) {

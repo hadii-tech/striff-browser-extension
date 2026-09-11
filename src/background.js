@@ -43,8 +43,6 @@ loadDebugFlag();
 migrateLegacyTokenFromLocal().then(() => broadcastTokenState()).catch(() => {});
 
 const normalizeApiBase = BgUtils.normalizeApiBase;
-const buildGitHubPrefetchUrl = BgUtils.buildGitHubPrefetchUrl;
-const buildArtifactPrefetchUrl = BgUtils.buildArtifactPrefetchUrl;
 
 function abortableTimeout(ms) {
   const ctrl = new AbortController();
@@ -235,38 +233,6 @@ async function downloadRepoZipAsArrayBuffer(owner, repo, ref, apiBase) {
 
 const readApiErrorResponse = BgUtils.readApiErrorResponse;
 
-// Warm the /ai-review status endpoint off the back of a prefetch (issue #14, change 5). The server
-// auto-starts the review when it builds the diagram, so if the prefetch reply carries the operation
-// and its engagement token we fire one best-effort GET to nudge the review further along before the
-// user opens the PR. Fire-and-forget: never awaited, never surfaced -- a failure here changes
-// nothing, since the interactive path polls the same endpoint anyway. Adds no new prefetch trigger;
-// it only piggybacks on prefetch replies that already happened.
-function warmAiReviewFromPrefetch(json, apiBase) {
-  try {
-    const extract = BgUtils.extractAiReviewWarmTarget;
-    if (typeof extract !== 'function' || !json || typeof json !== 'object') return;
-    const { operationId, engagementToken, status } = extract(json) || {};
-    if (!operationId || !engagementToken) return;
-    // Only warm a review the server actually has running or ready; nothing to warm otherwise.
-    if (!(status === 'PENDING' || status === 'RUNNING' || status === 'READY')) return;
-    const base = normalizeApiBase(apiBase);
-    if (!base) return;
-    const url = `${base}/api/v1/striffs/${encodeURIComponent(operationId)}/ai-review`;
-    const t = abortableTimeout(15000);
-    fetch(url, {
-      method: 'GET',
-      headers: { 'X-Striff-Engagement-Token': engagementToken },
-      signal: t.signal,
-      cache: 'no-cache'
-    })
-      .then((res) => { debugLog('warmAiReviewFromPrefetch', { status: res.status }); })
-      .catch((e) => { debugLog('warmAiReviewFromPrefetch error', { error: String(e?.message || e) }); })
-      .finally(() => t.cancel());
-  } catch (e) {
-    debugLog('warmAiReviewFromPrefetch skipped', { error: String(e?.message || e) });
-  }
-}
-
 async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { timeoutMs = 120000, apiBase = '' } = {}) {
   const sanitizedChangedFiles = sanitizeChangedFilesPayload(changedFiles);
 
@@ -279,7 +245,15 @@ async function postIncrementalToLocal(apiUrl, beforeAB, changedFiles = [], { tim
 
   const t = abortableTimeout(timeoutMs);
   try {
-    const res = await fetch(apiUrl, { method: 'POST', body: fd, signal: t.signal });
+    // RFC 7240: ask for 202 and a job to poll. Without it the API holds the request until the
+    // analysis finishes (for up to 170s), which is how it keeps the 1.0.x extension -- which cannot
+    // poll -- working; this client can, and would rather not hold a socket open for minutes.
+    const res = await fetch(apiUrl, {
+      method: 'POST',
+      body: fd,
+      headers: { Prefer: 'respond-async' },
+      signal: t.signal
+    });
     if (!res.ok) {
       const parsed = await readApiErrorResponse(res);
       return {
@@ -447,6 +421,21 @@ async function clearGithubLocalStorages({ senderTabId = null, senderUrl = "" } =
   }
 }
 
+async function clearAllStriffsCaches({ senderTabId = null, senderUrl = "" } = {}) {
+  const clearAt = Date.now();
+  try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
+  clearRuntimeCaches();
+  await clearChromeStorageCaches();
+  await clearIndexedDbCaches();
+  await cleanupOrphanedTempKeys();
+  const tabsTouched = await clearGithubLocalStorages({ senderTabId, senderUrl });
+  // Run a second pass to remove any keys re-written by active tabs during clear.
+  await clearChromeStorageCaches();
+  await clearIndexedDbCaches();
+  try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
+  return { tabsTouched, clearAt };
+}
+
 const LOCAL_TOKEN_KEY = 'ghToken';
 
 async function clearTokenFromStorage() {
@@ -555,20 +544,10 @@ async function lazyCacheCleanup() {
 const handlers = {
   clearStriffsCaches: async (msg, { safeReply }) => {
     try {
-      const clearAt = Date.now();
-      try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
-      clearRuntimeCaches();
-      await clearChromeStorageCaches();
-      await clearIndexedDbCaches();
-      await cleanupOrphanedTempKeys();
-      const tabsTouched = await clearGithubLocalStorages({
+      const { tabsTouched, clearAt } = await clearAllStriffsCaches({
         senderTabId: Number.isInteger(msg?.senderTabId) ? msg.senderTabId : null,
         senderUrl: msg?.senderUrl || ""
       });
-      // Run a second pass to remove any keys re-written by active tabs during clear.
-      await clearChromeStorageCaches();
-      await clearIndexedDbCaches();
-      try { await chrome.storage.local.set({ [CLEAR_FLAG_KEY]: clearAt }); } catch {}
       safeReply({ ok: true, tabsTouched, cacheClearAt: clearAt });
     } catch (e) {
       safeReply({ ok: false, error: String(e?.message || e) });
@@ -580,6 +559,9 @@ const handlers = {
   forgetToken: async (msg, { safeReply }) => {
     try {
       await clearTokenFromStorage();
+      // Private-repo diagrams can only have been produced with the token; keeping them cached
+      // would leave them on screen after the user revoked the extension's access.
+      await clearAllStriffsCaches();
       const hasToken = await broadcastTokenState();
       safeReply({ ok: true, hasToken });
     } catch (e) {
@@ -667,148 +649,6 @@ const handlers = {
     } finally {
       t.cancel();
     }
-  },
-  prefetchStriffsWithToken: async (msg, { safeReply }) => {
-    const { owner, repo, pull_number, updated_at, token } = msg;
-    if (!owner || !repo || !pull_number || !updated_at) {
-      safeReply({ ok: false, error: 'missing args (owner/repo/pull_number/updated_at)' });
-      return;
-    }
-
-    const apiBase = await getApiBase();
-    const url = buildGitHubPrefetchUrl(apiBase, owner, repo, pull_number, updated_at);
-    debugLog('prefetchStriffsWithToken using base', apiBase);
-
-    const t = abortableTimeout(30000);
-    const started = Date.now();
-    let lastStatus = null;
-    try {
-      const headers = {};
-      if (token) {
-        headers.Authorization = `token ${token}`;
-      }
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        signal: t.signal,
-        cache: 'no-cache'
-      });
-      lastStatus = res.status;
-      if (!res.ok) {
-        const parsed = await readApiErrorResponse(res);
-        debugLog('prefetchStriffsWithToken timings', {
-          owner, repo, pull_number,
-          durationMs: Date.now() - started,
-          status: res.status,
-          ok: false
-        });
-        safeReply({
-          ok: false,
-          status: res.status,
-          error: parsed.error,
-          errorCode: parsed.errorCode,
-          detail: parsed.detail
-        });
-        return;
-      }
-
-      const contentType = String(res.headers.get('content-type') || '').toLowerCase();
-      const json = contentType.includes('application/json') ? await res.json().catch(() => null) : null;
-      debugLog('prefetchStriffsWithToken timings', {
-        owner, repo, pull_number,
-        durationMs: Date.now() - started,
-        status: res.status,
-        ok: true
-      });
-      safeReply({
-        ok: true,
-        json,
-        timings: { type: 'prefetch', durationMs: Date.now() - started, status: res.status }
-      });
-      warmAiReviewFromPrefetch(json, apiBase);
-    } catch (e) {
-      debugLog('prefetchStriffsWithToken error', {
-        durationMs: Date.now() - started,
-        status: lastStatus,
-        error: String(e?.message || e)
-      });
-      safeReply({ ok: false, error: String(e?.message || e) });
-    } finally {
-      t.cancel();
-    }
-  },
-  prefetchStriffsWithArtifacts: async (msg, { safeReply }) => {
-    const {
-      baseOwner, baseRepo, baseBranch,
-      changedFiles = [],
-      changedFilesStorageKey = '',
-      owner = '',
-      repo = '',
-      pull_number = '',
-      updated_at = ''
-    } = msg;
-
-    if (!baseOwner || !baseRepo || !baseBranch) {
-      safeReply({ ok: false, error: 'missing repo/ref args' });
-      return;
-    }
-
-    let effectiveChangedFiles = Array.isArray(changedFiles) ? changedFiles : [];
-    if ((!effectiveChangedFiles || !effectiveChangedFiles.length) && changedFilesStorageKey) {
-      try {
-        const stored = await chrome.storage.local.get([changedFilesStorageKey]);
-        effectiveChangedFiles = Array.isArray(stored?.[changedFilesStorageKey]) ? stored[changedFilesStorageKey] : [];
-      } finally {
-        try { await chrome.storage.local.remove(changedFilesStorageKey); } catch {}
-      }
-    }
-
-    const overallStart = Date.now();
-    const apiBaseForZip = await getApiBase();
-    const before = await downloadRepoZipAsArrayBuffer(baseOwner, baseRepo, baseBranch, apiBaseForZip);
-    if (!before.ok) {
-      safeReply({
-        ok: false,
-        error: before.tooLarge ? before.error : `Failed downloading base zip: ${before.error}`,
-        ...(before.tooLarge ? { errorCode: 'ZIP_TOO_LARGE' } : {})
-      });
-      return;
-    }
-
-    const apiBase = await getApiBase();
-    const url = buildArtifactPrefetchUrl(apiBase, {
-      owner,
-      repo,
-      pullNumber: pull_number,
-      updatedAt: updated_at
-    });
-    debugLog('prefetchStriffsWithArtifacts using base', apiBase);
-    const posted = await postIncrementalToLocal(
-      url,
-      before.arrayBuffer,
-      effectiveChangedFiles,
-      { timeoutMs: 180000 }
-    );
-    if (!posted.ok) {
-      safeReply({
-        ok: false,
-        status: posted.status ?? null,
-        error: posted.error,
-        errorCode: posted.errorCode ?? null,
-        detail: posted.detail ?? null
-      });
-      return;
-    }
-    safeReply({
-      ok: true,
-      json: posted.json,
-      timings: {
-        type: 'artifact_prefetch',
-        durationMs: Date.now() - overallStart,
-        zipFromCache: !!before.fromCache
-      }
-    });
-    warmAiReviewFromPrefetch(posted.json, apiBase);
   },
   fetchSupportedLanguages: async (msg, { safeReply }) => {
     try {
@@ -964,7 +804,13 @@ const handlers = {
 
     const t = abortableTimeout(timeoutMs);
     try {
-      const init = { method, headers, signal: t.signal, cache: 'no-cache' };
+      // Allowed is not the same as trusted with the token: see withoutUnexpectedAuthorization.
+      const init = {
+        method,
+        headers: BgUtils.withoutUnexpectedAuthorization(url, headers),
+        signal: t.signal,
+        cache: 'no-cache'
+      };
       if (method !== 'GET' && body != null) init.body = body;
       const res = await fetch(url, init);
       const status = res.status;
