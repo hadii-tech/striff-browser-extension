@@ -2674,6 +2674,7 @@
         el.addEventListener('mouseleave', () => {
             if (pending == null) pending = setTimeout(remove, Math.min(actualTimeout, 4000));
         });
+        return () => { clearTimeout(pending); remove(); };
     };
 
     // Compute and set #striff-diagram-view height (~80% viewport)
@@ -10278,11 +10279,26 @@
         }
 
         if (!result) {
-          // Not in this browser's cache, so it goes to the server, where a first analysis takes
-          // minutes (177-483s measured, plus any queue). Said now: the only notice used to arrive 30s
-          // in and leave 15s later, so most of the wait had no explanation at all.
-          S.toast?.("Analyzing this pull request. A first analysis takes a few minutes; after that it loads from cache.", "info", { timeoutMs: 20000 });
-          result = await requestPrimary(meta, token);
+          // Not in this browser's cache, so it goes to the server -- which usually has it and answers
+          // in seconds. Only a first analysis takes minutes (177-483s measured, plus any queue), so
+          // the notice waits for evidence of one: the upload route's 202 (striffsAnalysisQueued), or
+          // on the token route, which sends no such signal, a wait too long to be a cache hit.
+          // Shown on every cache miss, it promised minutes before loads that took a second.
+          let dismissNotice = null;
+          const showNotice = () => {
+            if (dismissNotice) return;
+            dismissNotice = S.toast?.("Analyzing this pull request. A first analysis takes a few minutes; after that it loads from cache.", "info", { timeoutMs: 20000 }) || (() => {});
+          };
+          const onQueued = (msg) => { if (msg?.type === 'striffsAnalysisQueued') showNotice(); };
+          const noticeTimer = setTimeout(showNotice, 10000);
+          try { chrome.runtime.onMessage.addListener(onQueued); } catch {}
+          try {
+            result = await requestPrimary(meta, token);
+          } finally {
+            clearTimeout(noticeTimer);
+            try { chrome.runtime.onMessage.removeListener(onQueued); } catch {}
+            dismissNotice?.();
+          }
         }
 
         await renderStriffsResult(result, meta, { fromCache });
