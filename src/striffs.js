@@ -4503,9 +4503,11 @@
         root.querySelector?.("a[href*='#diff-'][aria-label]")?.getAttribute?.('aria-label'),
         root.querySelector?.("[data-testid='file-header'] a")?.getAttribute?.('title'),
         root.querySelector?.(".file-info a.Link--primary")?.getAttribute?.('title'),
-        extractLongestPathLikeSubstring(root.textContent),
         root.querySelector?.("[data-testid='file-header'] a")?.textContent,
-        root.querySelector?.(".file-info a.Link--primary")?.textContent
+        root.querySelector?.(".file-info a.Link--primary")?.textContent,
+        // Last, not ahead of the header text: a diff's body names other files. On /changes nothing
+        // above resolves, so README.md's diff was filed under a path its prose happened to mention.
+        extractLongestPathLikeSubstring(root.textContent)
       ];
       for (const candidate of candidates) {
         const normalized = getNormalizedFilePathCandidate(candidate);
@@ -5168,14 +5170,34 @@
     return files;
   };
 
+    // GitHub names a diff after its file: the anchor is "diff-" plus the SHA-256 of the file's path.
+    // A scraped pair that fails that check was scraped wrong -- on /changes a diff's path used to be
+    // guessed from its body text, so README.md's diff was filed under a path its prose mentioned and
+    // overwrote that file's entry. Such pairs are dropped; anchors not in that form pass unchecked.
+    const GITHUB_DIFF_ID = /^diff-([0-9a-f]{64})$/;
+    const sha256Hex = async (text) => Array.from(
+      new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))),
+      (b) => b.toString(16).padStart(2, '0')
+    ).join('');
+    const namesItsDiff = async (fullPath, diffId) => {
+      const hash = GITHUB_DIFF_ID.exec(diffId)?.[1];
+      if (!hash) return true;
+      try {
+        return (await sha256Hex(fullPath.replace(/^\/+/, ''))) === hash;
+      } catch {
+        return true;
+      }
+    };
+
     S.buildFilePathToDiffIdMapAsync = () => {
-        return Promise.resolve().then(() => {
+        return Promise.resolve().then(async () => {
             const map = new Map();
+            const pairs = [];
             const setMap = (rawPath, rawDiffId) => {
               const fullPath = ensureLeadingSlash(S.normalizePath(S.stripRenamePath(rawPath || '')));
               const diffId = String(rawDiffId || '').replace(/^#/, '').trim();
               if (!fullPath || !diffId) return;
-              map.set(fullPath, diffId);
+              pairs.push([fullPath, diffId]);
             };
             const items = S.$$all(["li[id^='file-tree-item-diff-']", "li[data-tree-entry-type='file']", "li[role='treeitem']"]);
             for (const li of items) {
@@ -5219,6 +5241,11 @@
               const diffId = href.startsWith('#') ? href.slice(1) : (href.match(/#(.+)$/)?.[1] || null);
               const fallbackId = fileNode?.id && /^diff-/i.test(fileNode.id) ? fileNode.id : null;
               setMap(rawPath, diffId || fallbackId);
+            }
+            // In scrape order, so a later correct pair still wins over an earlier one as before; a
+            // pair naming the wrong file never gets the chance to overwrite anything.
+            for (const [fullPath, diffId] of pairs) {
+              if (await namesItsDiff(fullPath, diffId)) map.set(fullPath, diffId);
             }
             S.__filePathToDiffId = map;
             const pathToDiff = Array.from(map.entries());
@@ -8747,7 +8774,12 @@
     }
     // No verdicts yet: show progress only while the server actually has a review running.
     if (s === "PENDING" || s === "RUNNING") {
-      el.textContent = "Checking documented rules…";
+      // Reading a repository's documents into rules is the slow part of a review, minutes rather than
+      // seconds, and it gave no sign of that. striff-api says when it has not read this repository's
+      // documents yet (aiReviewWarmupRequired, token route only); otherwise say it can take a while.
+      el.textContent = result?.aiReviewWarmupRequired === true
+        ? "Reading this repository's documents for the first time. This review takes a few minutes."
+        : "Checking documented rules… this can take a few minutes.";
       el.classList.remove("striffs-coverage-headline--risk");
       el.style.display = "";
       return;
@@ -9982,6 +10014,19 @@
       };
     }
 
+    // A gateway's answer rather than the API's own -- nginx while a deploy restarts the pod, or a
+    // proxy that could not reach it. There is nothing in it worth showing, and trying again shortly
+    // is the fix. The API's own 504 (ANALYSIS_STILL_RUNNING) carries a code and is not caught here.
+    if (!code && (status === 502 || status === 503 || status === 504)) {
+      return {
+        tooltip: "Striffs is briefly unavailable. Try again in a minute.",
+        toast: "<strong>Striffs is briefly unavailable.</strong> It is probably restarting. Try again in a minute.",
+        tone: 'neutral',
+        disabled: false,
+        htmlToast: true
+      };
+    }
+
     if (code === 'UPSTREAM_SERVICE_ERROR' || status === 502) {
       return {
         tooltip: text,
@@ -10203,15 +10248,6 @@
       const meta = S.extractPRMetadata();
       const { updated_at } = meta;
 
-      // A first analysis takes minutes (177-483s measured, plus any queue), token or not: a public
-      // pull request goes through the upload route either way, so suggesting a token here promised
-      // a speed-up it could not deliver. Said once, so a long wait reads as expected, not stuck.
-      const slowNoticeTimer = setTimeout(() => {
-        if (S.__autoFetchPromise) {
-          S.toast?.("The first analysis of a pull request takes a few minutes. After that it loads from cache.", "info", { timeoutMs: 15000 });
-        }
-      }, 30000);
-
       const requestMode = token ? 'token' : 'zips';
       const debugCtx = await S.getStriffsDebugContext?.();
       S.cinfo?.('autoFetchStriffs context', {
@@ -10242,6 +10278,10 @@
         }
 
         if (!result) {
+          // Not in this browser's cache, so it goes to the server, where a first analysis takes
+          // minutes (177-483s measured, plus any queue). Said now: the only notice used to arrive 30s
+          // in and leave 15s later, so most of the wait had no explanation at all.
+          S.toast?.("Analyzing this pull request. A first analysis takes a few minutes; after that it loads from cache.", "info", { timeoutMs: 20000 });
           result = await requestPrimary(meta, token);
         }
 
@@ -10279,7 +10319,6 @@
         terminalErrorMessage = message;
         return false;
       } finally {
-        clearTimeout(slowNoticeTimer);
         if (!skipReconcile) {
           S.reconcileStriffButtonState?.({ errorMessage: terminalErrorMessage });
         }

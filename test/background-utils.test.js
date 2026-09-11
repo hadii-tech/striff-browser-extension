@@ -113,6 +113,23 @@ test('readApiErrorResponse prefers structured json error payloads', async () => 
   });
 });
 
+test('readApiErrorResponse does not pass a proxy HTML page off as the message', async () => {
+  const nginx503 = '<html>\n<head><title>503 Service Temporarily Unavailable</title></head>\n'
+    + '<body>\n<center><h1>503 Service Temporarily Unavailable</h1></center>\n</body>\n</html>\n'
+    + '<!-- a padding to disable MSIE and Chrome friendly error page -->';
+  // Labelled as HTML, and not labelled at all: both reached the toast verbatim.
+  for (const contentType of ['text/html', '']) {
+    const parsed = await readApiErrorResponse({
+      status: 503,
+      headers: { get: () => contentType },
+      json: async () => null,
+      text: async () => nginx503
+    });
+    assert.equal(parsed.error, 'The Striffs service returned HTTP 503.');
+    assert.equal(parsed.errorCode, null);
+  }
+});
+
 test('isGithubPullRequestUrl matches only pull request pages', () => {
   assert.equal(isGithubPullRequestUrl('https://github.com/openai/openai/pull/123/files'), true);
   assert.equal(isGithubPullRequestUrl('https://github.com/openai/openai/issues/123'), false);

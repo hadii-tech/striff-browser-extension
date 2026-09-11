@@ -2,6 +2,20 @@
 
 ## 1.1.0
 
+- The wait for a first analysis is explained when it starts. The only notice appeared 30 seconds
+  in and left 15 seconds later, so most of a wait measured in minutes had no explanation; it now
+  shows as soon as the request goes to the server. The documented-rule review, which reads the
+  repository's documents and is the slowest part, says it can take a few minutes -- and says
+  plainly when striff-api reports it is reading a repository's documents for the first time.
+- Clicking a top-level file such as README.md in the new /changes view no longer selects an
+  unrelated component. That view gives each diff no path attribute, so the extension guessed the
+  path from the longest path-like text in the diff; README.md's prose named
+  `tradingagents/default_config.py`, its diff was filed under that path, and the click resolved to
+  that file's component. The guess now comes last, and every file-to-diff pairing is checked
+  against GitHub's own scheme -- the diff id is the SHA-256 of the path -- so a wrong one is dropped.
+- A gateway error reads as one. While a deploy restarts the API, nginx answers 503 with an HTML
+  page, and the extension printed that page, markup and all, into a toast. It now says Striffs is
+  briefly unavailable and to try again in a minute.
 - A GitHub token that stops working is reported. GitHub's 401 for an expired or revoked token was
   absorbed by the fallbacks behind every GitHub call, so the popup kept saying "Token saved" while
   nothing used it; the page now says the token was rejected and to update it. The token is also held
